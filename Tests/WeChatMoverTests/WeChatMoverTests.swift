@@ -43,21 +43,63 @@ private func makeIsolatedDefaults() -> (defaults: UserDefaults, cleanup: () -> V
             == "/Volumes/Ext/MyFolder/WeChatData/com.tencent.xinWeChat")
 }
 
-@Test func sourcePathAbsolutePassthrough() {
-    // 绝对路径子目录（企业微信 Profiles）原样返回，不拼容器根
-    let abs = "/Users/whoever/Documents/Profiles"
-    #expect(WeChatPaths.sourceDirectory(
-        containerRoot: URL(fileURLWithPath: "/tmp/container"), subdir: abs).path == abs)
-    // 相对路径仍拼容器根
-    #expect(WeChatPaths.sourceDirectory(
-        containerRoot: URL(fileURLWithPath: "/tmp/container"),
-        subdir: "WeDrive").path == "/tmp/container/WeDrive")
+@Test func weworkSourceMapping() {
+    // 企业微信整搬两个目录：容器 Data 整体 + 容器外 WXWork/Data。
+    // 不猜容器内部子目录（老安装 Documents 是软链、新安装是真实目录，整搬都覆盖）。
+    let container = URL(fileURLWithPath: "/tmp/fixture/Data", isDirectory: true)
+    let ww = AppProfile.wework
+    #expect(ww.sourceDirectory(key: "com.tencent.WeWorkMac-Data", containerRoot: container) == container)
+    #expect(ww.sourceDirectory(key: "WXWork-Data", containerRoot: container)
+            == FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/WXWork/Data", isDirectory: true))
+    // 微信候选仍是容器相对路径
+    let wc = AppProfile.wechat
+    #expect(wc.sourceDirectory(key: "Documents/xwechat_files", containerRoot: container).path
+            == "/tmp/fixture/Data/Documents/xwechat_files")
 }
 
-@Test func sourcePathMapping() {
-    let container = URL(fileURLWithPath: "/tmp/container/Data", isDirectory: true)
-    #expect(WeChatPaths.sourceDirectory(containerRoot: container, subdir: "Documents/xwechat_files").path
-            == "/tmp/container/Data/Documents/xwechat_files")
+// MARK: - 目录树拷贝（整搬容器 Data 的基石）
+
+@Test func copyTreeSkipsSocketsAndAbsolutizesRelativeSymlinks() throws {
+    try withTempDir { root in
+        let fm = FileManager.default
+        let src = root.appendingPathComponent("src", isDirectory: true)
+        let dst = root.appendingPathComponent("dst", isDirectory: true)
+        try fm.createDirectory(at: src.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try Data("hello".utf8).write(to: src.appendingPathComponent("sub/file.txt"))
+        // 相对软链（企微容器 Data 里的 Desktop/Downloads 就是这种）
+        try fm.createSymbolicLink(atPath: src.appendingPathComponent("sub/rel").path,
+                                  withDestinationPath: "../sub/file.txt")
+        // 绝对软链原样保留
+        try fm.createSymbolicLink(atPath: src.appendingPathComponent("abs").path,
+                                  withDestinationPath: "/tmp")
+        // socket：copyItem 碰到会直接报错，copyTree 必须跳过
+        let sockFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let sockPath = src.appendingPathComponent("ipc.sock").path
+        _ = withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            strcpy(UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self), sockPath)
+        }
+        #expect(bind(sockFD, withUnsafePointer(to: &addr, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 } }),
+                     socklen_t(MemoryLayout<sockaddr_un>.size)) == 0)
+        defer { close(sockFD) }
+
+        try Migrator.copyTree(from: src, to: dst)
+
+        // 普通文件内容一致
+        #expect(try String(contentsOf: dst.appendingPathComponent("sub/file.txt"), encoding: .utf8) == "hello")
+        // 相对软链 → 绝对软链，且在源位置可解析（搬走不失效）
+        let relDest = try fm.destinationOfSymbolicLink(atPath: dst.appendingPathComponent("sub/rel").path)
+        #expect(relDest.hasPrefix("/"))
+        #expect(fm.fileExists(atPath: dst.appendingPathComponent("sub/rel").path))
+        // 绝对软链原样
+        #expect(try fm.destinationOfSymbolicLink(atPath: dst.appendingPathComponent("abs").path) == "/tmp")
+        // socket 被跳过
+        #expect(!fm.fileExists(atPath: dst.appendingPathComponent("ipc.sock").path))
+        // 大小校验语义一致（只算普通文件）
+        #expect(DiskProbe.directorySize(at: dst) == DiskProbe.directorySize(at: src))
+    }
 }
 
 // MARK: - 软链识别
@@ -2246,11 +2288,7 @@ private func makeOverwriteFixture(
     // 不写死用户名：必须等于「当前用户 home + 容器相对路径」
     #expect(ww.containerRoot == FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Containers/com.tencent.WeWorkMac/Data", isDirectory: true))
-    #expect(ww.candidateSubdirs.count == 2)
-    // Profiles 在真实 home（企业微信运行时用 ~/Documents/Profiles，不用容器路径）
-    #expect(ww.candidateSubdirs[0] == FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Documents/Profiles").path)
-    #expect(ww.candidateSubdirs[1] == "WeDrive")
+    #expect(ww.candidateSubdirs == ["com.tencent.WeWorkMac-Data", "WXWork-Data"])
     #expect(ww.downloadURL.absoluteString.contains("work.weixin.qq.com"))
     #expect(ww.targetBaseDefaultsKey == "targetBasePath.wework")
     #expect(ww.lastSignedVersionDefaultsKey == "lastSignedVersion.wework")
@@ -2261,8 +2299,8 @@ private func makeOverwriteFixture(
 }
 
 @Test func weworkItemNames() {
-    #expect(Copywriting.itemName("Documents/Profiles") == "聊天记录与文件")
-    #expect(Copywriting.itemName("WeDrive") == "微盘文件")
+    #expect(Copywriting.itemName("com.tencent.WeWorkMac-Data") == "容器数据（全部）")
+    #expect(Copywriting.itemName("WXWork-Data") == "应用支持数据")
 }
 
 /// 切档案：容器/候选目录/偏好键/目标位置全部跟随，展示状态清空。

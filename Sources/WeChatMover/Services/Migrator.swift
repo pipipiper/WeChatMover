@@ -38,6 +38,52 @@ enum Migrator {
         WeChatPaths.backupDirectory(for: source)
     }
 
+    // MARK: - 目录树拷贝
+
+    /// 递归拷贝目录树（target 必须不存在；校验用 directorySize 只算普通文件，与本拷贝语义一致）。
+    /// - 普通文件逐一 copyItem，保留元数据；目录保留 posix 权限；
+    /// - 相对软链改写为按源位置解析后的绝对软链——企业微信容器 Data 里的
+    ///   Desktop/Downloads 等就是相对软链，整树搬离容器后不改写会全部失效；
+    /// - socket/fifo 等运行时特殊文件跳过（App 启动时自建；copyItem 碰到会直接报错，
+    ///   实测整搬企微容器 Data 必踩）。
+    static func copyTree(from source: URL, to target: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: target, withIntermediateDirectories: true,
+                               attributes: posixAttributes(of: source))
+        guard let enumerator = fm.enumerator(atPath: source.path) else {
+            throw MigrationError.sourceMissing(source.path)
+        }
+        for case let relative as String in enumerator {
+            let src = source.appendingPathComponent(relative)
+            let dst = target.appendingPathComponent(relative)
+            guard let type = try? fm.attributesOfItem(atPath: src.path)[.type] as? FileAttributeType else {
+                continue
+            }
+            switch type {
+            case .typeDirectory:
+                try fm.createDirectory(at: dst, withIntermediateDirectories: true,
+                                       attributes: posixAttributes(of: src))
+            case .typeSymbolicLink:
+                let dest = try fm.destinationOfSymbolicLink(atPath: src.path)
+                let resolved = dest.hasPrefix("/") ? dest
+                    : ((src.deletingLastPathComponent().path as NSString)
+                        .appendingPathComponent(dest) as NSString).standardizingPath
+                try fm.createSymbolicLink(atPath: dst.path, withDestinationPath: resolved)
+            case .typeRegular:
+                try fm.copyItem(at: src, to: dst)
+            default:
+                continue   // socket / fifo / 设备文件等：跳过
+            }
+        }
+    }
+
+    /// 目录的 posix 权限属性（搬容器目录时保留 700 等权限位）。
+    private static func posixAttributes(of url: URL) -> [FileAttributeKey: Any] {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let perm = attrs[.posixPermissions] else { return [:] }
+        return [.posixPermissions: perm]
+    }
+
     // MARK: - 迁移
 
     /// 把 source 迁移到 target（target 必须不存在）。
@@ -58,7 +104,7 @@ enum Migrator {
 
         // 1. 拷贝
         do {
-            try fm.copyItem(at: source, to: target)
+            try copyTree(from: source, to: target)
         } catch {
             try? fm.removeItem(at: target)
             throw error
@@ -144,7 +190,7 @@ enum Migrator {
 
         // 2. 拷回原位
         do {
-            try fm.copyItem(at: target, to: source)
+            try copyTree(from: target, to: source)
         } catch {
             // 拷回失败：尽量恢复软链，数据仍在 target
             try? fm.removeItem(at: source)
@@ -184,7 +230,7 @@ enum Migrator {
 
         // 2. 拷入外置数据；失败回滚
         do {
-            try fm.copyItem(at: target, to: source)
+            try copyTree(from: target, to: source)
         } catch {
             try? fm.removeItem(at: source)
             try? fm.moveItem(at: backup, to: source)
@@ -228,7 +274,7 @@ enum Migrator {
 
         // 2. 拷回原位
         do {
-            try fm.copyItem(at: target, to: source)
+            try copyTree(from: target, to: source)
         } catch {
             try? fm.removeItem(at: source)
             try? fm.createSymbolicLink(at: source, withDestinationURL: target)
@@ -317,7 +363,7 @@ enum Migrator {
 
         // 1. 拷贝到新位置
         do {
-            try fm.copyItem(at: oldTarget, to: newTarget)
+            try copyTree(from: oldTarget, to: newTarget)
         } catch {
             try? fm.removeItem(at: newTarget)
             throw error

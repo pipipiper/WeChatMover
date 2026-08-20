@@ -135,8 +135,8 @@ final class AppViewModel: ObservableObject {
 
     /// 容器根目录（测试可注入临时目录 fixture，默认跟随当前档案）。
     var containerRoot = WeChatPaths.defaultContainerRoot
-    /// 候选迁移子目录（测试可注入，默认跟随当前档案）。
-    var candidateSubdirs: [String] = WeChatPaths.candidateSubdirs
+    /// 候选迁移目录 key（测试可注入，默认跟随当前档案；key → 源路径见 AppProfile.sourceDirectory）。
+    var candidateSubdirs: [String] = AppProfile.wechat.candidateSubdirs
 
     /// 切换目标 App 档案：重挂路径/注入实现/档案专属偏好键，清空状态后整体刷新。
     /// 有操作进行中时拒绝切换（弹提示）。
@@ -641,7 +641,7 @@ final class AppViewModel: ObservableObject {
         Task.detached { [weak self] in
             let readable = PermissionHelper.canReadContainer(path: containerRoot.path)
             let items: [ItemStatus] = candidateSubdirs.compactMap { subdir in
-                let source = WeChatPaths.sourceDirectory(containerRoot: containerRoot, subdir: subdir)
+                let source = profile.sourceDirectory(key: subdir, containerRoot: containerRoot)
                 let state = itemState(at: source)
                 guard state != .missing else { return nil }
                 let hasBackup = FileManager.default.fileExists(

@@ -37,9 +37,8 @@ enum AppProfile: String, CaseIterable, Identifiable {
             .appendingPathComponent("Library/Containers/\(bundleID)/Data", isDirectory: true)
     }
 
-    /// 候选迁移子目录。相对路径基于容器 Data 根；以 "/" 开头的为绝对路径
-    /// （企业微信的 Profiles 例外：该版本运行时使用真实 ~/Documents/Profiles，
-    /// 容器内 Documents 只是安装期布置，软链必须建在真实 home 路径上）。
+    /// 候选迁移目录 key：在候选间唯一，兼作外置盘文件夹名（取末级）、展示键、清单键。
+    /// key → 实际源路径的映射见 sourceDirectory(key:containerRoot:)。
     var candidateSubdirs: [String] {
         switch self {
         case .wechat:
@@ -50,10 +49,25 @@ enum AppProfile: String, CaseIterable, Identifiable {
             ]
         case .wework:
             return [
-                FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Documents/Profiles").path,  // 实测：运行时用真实 home
-                "WeDrive",              // 微盘同步文件（容器路径，软链有效）
+                "com.tencent.WeWorkMac-Data",   // 整个容器 Data：聊天/文件/微盘/登录态全在里面
+                "WXWork-Data",                  // 容器外的应用支持数据
             ]
+        }
+    }
+
+    /// 候选 key → 实际源目录。
+    /// 微信全部是容器相对路径；企业微信直接整搬容器 Data 和容器外的 WXWork/Data——
+    /// 不猜内部子目录（老安装的容器 Documents 是指向 ~/Documents 的软链，
+    /// 新安装则是真实目录，布局随安装期不同，整搬两种布局都覆盖）。
+    func sourceDirectory(key: String, containerRoot: URL) -> URL {
+        switch (self, key) {
+        case (.wework, "com.tencent.WeWorkMac-Data"):
+            return containerRoot
+        case (.wework, "WXWork-Data"):
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/WXWork/Data", isDirectory: true)
+        default:
+            return containerRoot.appendingPathComponent(key, isDirectory: true)
         }
     }
 
