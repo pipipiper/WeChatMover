@@ -100,6 +100,7 @@ struct ManageSection: View {
                         }
                         Button("清理备份…") { vm.activeDialog = .backupConfirm }
                             .controlSize(.small)
+                            .foregroundStyle(DesignTokens.Colors.danger)   // 删除操作：红色标记
                             .disabled(!vm.canDeleteBackups)
                     }
                 }
@@ -120,6 +121,7 @@ struct ManageSection: View {
                                   : "还原数据到 Mac 后可用")
                         Button("清理外置数据…") { vm.requestCleanExternalData() }
                             .controlSize(.small)
+                            .foregroundStyle(DesignTokens.Colors.danger)   // 删除操作：红色标记
                             .disabled(!vm.canCleanExternalData)
                             .help(vm.canCleanExternalData
                                   ? "删除外置硬盘上的 WeChatData"
