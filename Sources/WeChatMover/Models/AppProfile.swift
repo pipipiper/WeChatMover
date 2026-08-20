@@ -49,20 +49,20 @@ enum AppProfile: String, CaseIterable, Identifiable {
             ]
         case .wework:
             return [
-                "com.tencent.WeWorkMac-Data",   // 整个容器 Data：聊天/文件/微盘/登录态全在里面
-                "WXWork-Data",                  // 容器外的应用支持数据
+                "Documents",        // 聊天记录与文件
+                "WeDrive",          // 微盘同步文件
+                "WXWork-Data",      // 容器外 ~/Library/Application Support/WXWork/Data
             ]
         }
     }
 
     /// 候选 key → 实际源目录。
-    /// 微信全部是容器相对路径；企业微信直接整搬容器 Data 和容器外的 WXWork/Data——
-    /// 不猜内部子目录（老安装的容器 Documents 是指向 ~/Documents 的软链，
-    /// 新安装则是真实目录，布局随安装期不同，整搬两种布局都覆盖）。
+    /// 微信全部是容器相对路径；企业微信的 Documents/WeDrive 也是容器相对
+    /// （实测：整搬容器 Data 会被系统拒绝——Data 本体有 MACL 保护，
+    /// 但其子目录改名/建软链都正常，所以按子目录迁移）。
+    /// WXWork-Data 在容器外，是唯一的特例。
     func sourceDirectory(key: String, containerRoot: URL) -> URL {
         switch (self, key) {
-        case (.wework, "com.tencent.WeWorkMac-Data"):
-            return containerRoot
         case (.wework, "WXWork-Data"):
             return FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/WXWork/Data", isDirectory: true)

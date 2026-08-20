@@ -129,7 +129,8 @@ enum Copywriting {
         case "xwechat_files": return "微信聊天文件"
         case "app_data": return "微信应用数据"
         case "com.tencent.xinWeChat": return "微信兼容数据"
-        case "com.tencent.WeWorkMac-Data": return "容器数据（全部）"
+        case "Documents": return "聊天记录与文件"
+        case "WeDrive": return "微盘文件"
         case "WXWork-Data": return "应用支持数据"
         default: return (subdir as NSString).lastPathComponent
         }

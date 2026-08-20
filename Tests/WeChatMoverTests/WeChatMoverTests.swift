@@ -44,11 +44,14 @@ private func makeIsolatedDefaults() -> (defaults: UserDefaults, cleanup: () -> V
 }
 
 @Test func weworkSourceMapping() {
-    // 企业微信整搬两个目录：容器 Data 整体 + 容器外 WXWork/Data。
-    // 不猜容器内部子目录（老安装 Documents 是软链、新安装是真实目录，整搬都覆盖）。
+    // 企业微信按子目录迁移：容器内 Documents/WeDrive + 容器外 WXWork/Data。
+    //（整搬容器 Data 会被系统 MACL 拒绝，子目录改名/建软链实测正常）
     let container = URL(fileURLWithPath: "/tmp/fixture/Data", isDirectory: true)
     let ww = AppProfile.wework
-    #expect(ww.sourceDirectory(key: "com.tencent.WeWorkMac-Data", containerRoot: container) == container)
+    #expect(ww.sourceDirectory(key: "Documents", containerRoot: container).path
+            == "/tmp/fixture/Data/Documents")
+    #expect(ww.sourceDirectory(key: "WeDrive", containerRoot: container).path
+            == "/tmp/fixture/Data/WeDrive")
     #expect(ww.sourceDirectory(key: "WXWork-Data", containerRoot: container)
             == FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/WXWork/Data", isDirectory: true))
@@ -2326,7 +2329,7 @@ private func makeOverwriteFixture(
     // 不写死用户名：必须等于「当前用户 home + 容器相对路径」
     #expect(ww.containerRoot == FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Containers/com.tencent.WeWorkMac/Data", isDirectory: true))
-    #expect(ww.candidateSubdirs == ["com.tencent.WeWorkMac-Data", "WXWork-Data"])
+    #expect(ww.candidateSubdirs == ["Documents", "WeDrive", "WXWork-Data"])
     #expect(ww.downloadURL.absoluteString.contains("work.weixin.qq.com"))
     #expect(ww.targetBaseDefaultsKey == "targetBasePath.wework")
     #expect(ww.lastSignedVersionDefaultsKey == "lastSignedVersion.wework")
@@ -2337,7 +2340,8 @@ private func makeOverwriteFixture(
 }
 
 @Test func weworkItemNames() {
-    #expect(Copywriting.itemName("com.tencent.WeWorkMac-Data") == "容器数据（全部）")
+    #expect(Copywriting.itemName("Documents") == "聊天记录与文件")
+    #expect(Copywriting.itemName("WeDrive") == "微盘文件")
     #expect(Copywriting.itemName("WXWork-Data") == "应用支持数据")
 }
 
