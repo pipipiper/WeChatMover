@@ -98,9 +98,10 @@ struct ManageSection: View {
                                 .disabled(!vm.canRestoreBackups)
                                 .help("从本地备份还原：放弃迁移，回到 Mac 上的旧数据（不需要外置硬盘）")
                         }
-                        Button("清理备份…") { vm.activeDialog = .backupConfirm }
+                        Button("清理备份…", role: .destructive) { vm.activeDialog = .backupConfirm }
+                            .buttonStyle(.borderless)   // bordered 会用 accent 覆盖前景色；borderless 才能显红
+                            .foregroundStyle(DesignTokens.Colors.danger)
                             .controlSize(.small)
-                            .foregroundStyle(DesignTokens.Colors.danger)   // 删除操作：红色标记
                             .disabled(!vm.canDeleteBackups)
                     }
                 }
@@ -119,9 +120,10 @@ struct ManageSection: View {
                             .help(vm.canOverwriteLocalWithExternal
                                   ? "用外置硬盘上的数据覆盖 Mac 内置盘现有数据（先备份为 _backup）"
                                   : "还原数据到 Mac 后可用")
-                        Button("清理外置数据…") { vm.requestCleanExternalData() }
+                        Button("清理外置数据…", role: .destructive) { vm.requestCleanExternalData() }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(DesignTokens.Colors.danger)
                             .controlSize(.small)
-                            .foregroundStyle(DesignTokens.Colors.danger)   // 删除操作：红色标记
                             .disabled(!vm.canCleanExternalData)
                             .help(vm.canCleanExternalData
                                   ? "删除外置硬盘上的 WeChatData"
