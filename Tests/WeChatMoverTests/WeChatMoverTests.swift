@@ -2306,3 +2306,28 @@ private func makeOverwriteFixture(
     try? await Task.sleep(nanoseconds: 500_000_000)
     #expect(vm.wechat.signature == nil) // 旧结果作废，不回写
 }
+
+// MARK: - 企业微信问题回归
+
+/// 回归：ensureQuit 的 isRunning 默认曾固定查微信——杀企业微信时微信在运行，
+/// 导致明明杀掉了也报"退出失败"。现在默认必须跟随传入的 bundleID。
+@Test func ensureQuitDefaultIsRunningFollowsBundleID() async {
+    var called = false
+    let ok = await WeChatQuitter.ensureQuit(
+        bundleID: "com.example.definitely-not-installed-\(UUID().uuidString)",
+        graceful: { called = true }, force: { called = true })
+    #expect(ok)          // 未运行的 App：立即成功
+    #expect(!called)     // 不触发退出动作
+}
+
+/// 回归：重签名一般性失败（非 TCC/不可写）也要弹指引并给重试入口，
+/// 不能只在日志里报一句就完。
+@MainActor @Test func resignGenericFailureShowsGuideWithRetry() async {
+    let vm = AppViewModel()
+    vm.isAppBundleWritable = { true }
+    vm.resignRunner = { completion in completion(.failed("resource busy")) }
+    vm.resignWeChat()
+    #expect(await waitUntil { vm.activeSheet == .appManagementGuide })
+    #expect(vm.resignGuideReason == .otherFailed("resource busy"))
+    #expect(!vm.isResigning)
+}

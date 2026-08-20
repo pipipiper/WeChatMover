@@ -39,15 +39,17 @@ enum WeChatQuitter {
     }
 
     /// 完整流程：优雅退出 → 等 graceTimeout → 仍运行则强杀 → 再等 forceTimeout。
-    /// 依赖全部可注入，单测用假 closure 验证流程分支，不触碰真实微信。
+    /// 依赖全部可注入，单测用假 closure 验证流程分支，不触碰真实 App。
+    /// 注意：isRunning 默认必须跟随 bundleID（曾默认查微信，导致杀企业微信时误报失败）。
     static func ensureQuit(
         bundleID: String = WeChatDetector.bundleID,
         graceTimeout: TimeInterval = 5,
         forceTimeout: TimeInterval = 3,
-        isRunning: () -> Bool = { WeChatDetector.isRunning() },
+        isRunning: (() -> Bool)? = nil,
         graceful: (() -> Void)? = nil,
         force: (() -> Void)? = nil
     ) async -> Bool {
+        let isRunning = isRunning ?? { WeChatDetector.isRunning(bundleID: bundleID) }
         let graceful = graceful ?? { requestGracefulQuit(bundleID: bundleID) }
         let force = force ?? { forceKill(bundleID: bundleID) }
         guard isRunning() else { return true }

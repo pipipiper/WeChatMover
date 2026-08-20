@@ -44,9 +44,10 @@ enum DefaultsKey {
 }
 
 /// 重签名指引弹窗的触发原因（决定指引文案）。
-enum ResignGuideReason {
+enum ResignGuideReason: Equatable {
     case appManagementDenied   // TCC「App 管理」未授权（codesign EPERM）
-    case notWritable           // /Applications/WeChat.app 当前用户不可写，走终端 sudo 兜底
+    case notWritable           // App 包当前用户不可写，走终端 sudo 兜底
+    case otherFailed(String)   // 其他失败（如嵌套进程占用）：展示错误 + 终端兜底 + 重试
 }
 
 @MainActor
@@ -1734,6 +1735,9 @@ final class AppViewModel: ObservableObject {
             refresh()
         case .failed(let message):
             log("⚠️ 重签名未完成：\(message)")
+            // 一般失败也给指引（错误详情 + 终端兜底命令 + 重试），不再只回日志
+            resignGuideReason = .otherFailed(message)
+            activeSheet = .appManagementGuide
             refresh()
         }
     }
