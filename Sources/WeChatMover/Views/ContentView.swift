@@ -28,6 +28,9 @@ struct ContentView: View {
             githubFooter
         }
         .background(DesignTokens.Colors.background)
+        // 切档案时整体重建视图树：部分视图（如目标磁盘卡片）的展示模型跨档案可能逐字段相等，
+        // SwiftUI 会跳过重绘导致主题色陈旧；.id 强制重建，颜色/文案全部按新档案重取。
+        .id(vm.profile)
         .tint(vm.profile.accent)   // 控件强调色跟随档案（微信绿/企业微信蓝）
         .toolbar { toolbarItems }
         .alert(item: alertOnlyDialog, content: dialog)

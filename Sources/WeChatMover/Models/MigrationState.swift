@@ -145,8 +145,8 @@ final class AppViewModel: ObservableObject {
             notice = "当前有操作进行中，请完成后再切换。"
             return
         }
+        Theme.accent = newProfile.accent   // 必须先于 profile 赋值（见 Theme 注释）
         profile = newProfile
-        Theme.accent = newProfile.accent
         containerRoot = newProfile.containerRoot
         candidateSubdirs = newProfile.candidateSubdirs
         bindInjectables(to: newProfile)

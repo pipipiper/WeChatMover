@@ -87,8 +87,9 @@ enum AppProfile: String, CaseIterable, Identifiable {
 }
 
 /// 主题色全局状态：跟随当前档案（微信绿 / 企业微信蓝）。
-/// 由 AppViewModel 切换档案时更新；消费 DesignTokens.Colors.accent 的视图
-/// 都持有 @EnvironmentObject vm，vm.profile 变化会触发重渲染重新取色。
+/// 由 AppViewModel.switchProfile 在更新 profile 之前赋值（时序关键：profile 的
+/// @Published 发布会立即触发重渲染，Theme 必须先就绪，否则图标"时而对时而错"）。
+/// 仅 UI 色值、主线程读写，故用 nonisolated(unsafe) 豁免并发检查。
 enum Theme {
     nonisolated(unsafe) static var accent: Color = AppProfile.wechat.accent
 }
