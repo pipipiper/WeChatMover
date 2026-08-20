@@ -1360,8 +1360,13 @@ final class AppViewModel: ObservableObject {
                 activeDialog = .existingTarget
                 log("⚠️ 目标位置已有数据（\(conflictingTargetPaths.count) 项），可能来自上次迁移中断或重复迁移：\(conflictingTargetPaths.joined(separator: "、"))")
             } else {
-                migrationOutcome = .failed(error.localizedDescription)
-                log("❌ 迁移失败：\(error.localizedDescription)")
+                // 权限类错误：多为 App 刚退出、数据句柄未释放完（沉降期已尽量吸收），提示稍后重试
+                var desc = error.localizedDescription
+                if (error as NSError).code == NSFileWriteNoPermissionError {
+                    desc += "（可能是\(appName)尚未完全退出，数据仍被占用，请稍后重试）"
+                }
+                migrationOutcome = .failed(desc)
+                log("❌ 迁移失败：\(desc)")
             }
         } else {
             migrationOutcome = .succeeded(items: localItems.count, bytes: totalLocalSize)

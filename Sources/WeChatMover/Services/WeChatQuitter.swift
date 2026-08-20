@@ -38,7 +38,7 @@ enum WeChatQuitter {
         return !isRunning()
     }
 
-    /// 完整流程：优雅退出 → 等 graceTimeout → 仍运行则强杀 → 再等 forceTimeout。
+    /// 完整流程：优雅退出 → 等 graceTimeout → 仍运行则强杀 → 再等 forceTimeout → 沉降确认。
     /// 依赖全部可注入，单测用假 closure 验证流程分支，不触碰真实 App。
     /// 注意：isRunning 默认必须跟随 bundleID（曾默认查微信，导致杀企业微信时误报失败）。
     /// 超时给得宽：实测企业微信优雅退出需 5s+（写状态落盘，外置硬盘更慢），
@@ -47,6 +47,8 @@ enum WeChatQuitter {
         bundleID: String = WeChatDetector.bundleID,
         graceTimeout: TimeInterval = 12,
         forceTimeout: TimeInterval = 8,
+        settleDuration: TimeInterval = 1.5,
+        settleTimeout: TimeInterval = 15,
         isRunning: (() -> Bool)? = nil,
         graceful: (() -> Void)? = nil,
         force: (() -> Void)? = nil
@@ -56,8 +58,38 @@ enum WeChatQuitter {
         let force = force ?? { forceKill(bundleID: bundleID) }
         guard isRunning() else { return true }
         graceful()
-        if await waitForExit(timeout: graceTimeout, isRunning: isRunning) { return true }
-        force()
-        return await waitForExit(timeout: forceTimeout, isRunning: isRunning)
+        var exited = await waitForExit(timeout: graceTimeout, isRunning: isRunning)
+        if !exited {
+            force()
+            exited = await waitForExit(timeout: forceTimeout, isRunning: isRunning)
+        }
+        guard exited else { return false }
+        // 沉降：App 刚退出时 NSRunningApplication 会抖动（已空 → 闪现 → 再空），
+        // 且容器/数据文件句柄可能未释放完——此时立刻迁移会被系统拒成「没有权限」
+        //（实测企微：退出"成功"后立刻改名容器 Data 报 513）。连续稳定未运行才算退干净。
+        return await waitUntilSettled(
+            isRunning: isRunning, sustained: settleDuration, timeout: settleTimeout)
+    }
+
+    /// 连续 sustained 秒都未运行才返回 true（期间抖动回运行则重新计时）；最多等 timeout 秒。
+    static func waitUntilSettled(
+        isRunning: () -> Bool,
+        sustained: TimeInterval,
+        timeout: TimeInterval
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var clearSince: Date?
+        while Date() < deadline {
+            if isRunning() {
+                clearSince = nil
+            } else {
+                if clearSince == nil { clearSince = Date() }
+                if let since = clearSince, Date().timeIntervalSince(since) >= sustained {
+                    return true
+                }
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return false
     }
 }

@@ -539,7 +539,7 @@ private final class QuitFixture: @unchecked Sendable {
 @Test func ensureQuitGracefulSuccess() async {
     let f = QuitFixture()
     let ok = await WeChatQuitter.ensureQuit(
-        graceTimeout: 2, forceTimeout: 1,
+        graceTimeout: 2, forceTimeout: 1, settleDuration: 0.2,
         isRunning: { f.running },
         graceful: { f.gracefulCalls += 1; f.running = false },   // 优雅退出成功
         force: { f.forceCalls += 1 })
@@ -551,7 +551,7 @@ private final class QuitFixture: @unchecked Sendable {
 @Test func ensureQuitForceKillAfterGraceTimeout() async {
     let f = QuitFixture()
     let ok = await WeChatQuitter.ensureQuit(
-        graceTimeout: 0.4, forceTimeout: 2,
+        graceTimeout: 0.4, forceTimeout: 2, settleDuration: 0.2,
         isRunning: { f.running },
         graceful: { f.gracefulCalls += 1 },                       // 优雅退出无效
         force: { f.forceCalls += 1; f.running = false })          // 强杀生效
@@ -577,6 +577,44 @@ private final class QuitFixture: @unchecked Sendable {
     #expect(!timedOut)
     let exited = await WeChatQuitter.waitForExit(timeout: 1, pollInterval: 0.1) { false }
     #expect(exited)
+}
+
+/// 沉降期：App 刚退出时运行状态会抖动（实测企微：已空 → 闪现 → 再空），
+/// 立刻迁移会被系统拒成"没有权限"；连续稳定未运行才算退干净。
+@Test func waitUntilSettledAbsorbsFlap() async {
+    final class F: @unchecked Sendable { var calls = 0 }
+    let f = F()
+    // 前两次查询抖动为"运行中"，之后稳定未运行 → 沉降后成功
+    let ok = await WeChatQuitter.waitUntilSettled(
+        isRunning: { f.calls += 1; return f.calls <= 2 },
+        sustained: 0.4, timeout: 30)   // 并行测试下 sleep 可能拉长，超时给足
+    #expect(ok)
+    // 始终运行 → 超时失败
+    let nope = await WeChatQuitter.waitUntilSettled(
+        isRunning: { true }, sustained: 0.3, timeout: 0.6)
+    #expect(!nope)
+}
+
+/// 端到端：退出过程中运行状态抖动，ensureQuit 仍成功（不强杀、不误报）。
+/// 抖动只留 1 次余量：并行测试下 sleep 会拉长，首次轮询就消耗掉，最终检查才稳定通过。
+@Test func ensureQuitSettlesAfterRunningStateFlap() async {
+    final class F: @unchecked Sendable {
+        var running = true
+        var flapBudget = 0   // 退出后剩余抖动次数
+        var forceCalls = 0
+    }
+    let f = F()
+    let ok = await WeChatQuitter.ensureQuit(
+        graceTimeout: 2, forceTimeout: 1, settleDuration: 0.3, settleTimeout: 30,
+        isRunning: {
+            if f.running { return true }
+            if f.flapBudget > 0 { f.flapBudget -= 1; return true }   // 抖动
+            return false
+        },
+        graceful: { f.running = false; f.flapBudget = 1 },
+        force: { f.forceCalls += 1 })
+    #expect(ok)
+    #expect(f.forceCalls == 0)
 }
 
 // MARK: - App 管理权限缺失分类（TCC EPERM）
