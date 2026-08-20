@@ -29,8 +29,10 @@ enum WeChatDetector {
     }
 
     /// 目标 App 是否正在运行（NSRunningApplication 查询，毫秒级，任意线程可调）。
+    /// 过滤 isTerminated：终止流程中的实例可能在列表里短暂残留，不算运行中。
     static func isRunning(bundleID: String = WeChatDetector.bundleID) -> Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .contains { !$0.isTerminated }
     }
 
     static func detect(

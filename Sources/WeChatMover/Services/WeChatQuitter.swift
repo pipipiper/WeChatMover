@@ -41,10 +41,12 @@ enum WeChatQuitter {
     /// 完整流程：优雅退出 → 等 graceTimeout → 仍运行则强杀 → 再等 forceTimeout。
     /// 依赖全部可注入，单测用假 closure 验证流程分支，不触碰真实 App。
     /// 注意：isRunning 默认必须跟随 bundleID（曾默认查微信，导致杀企业微信时误报失败）。
+    /// 超时给得宽：实测企业微信优雅退出需 5s+（写状态落盘，外置硬盘更慢），
+    /// 超时过短会在「App 其实正在正常退出」时误报失败。
     static func ensureQuit(
         bundleID: String = WeChatDetector.bundleID,
-        graceTimeout: TimeInterval = 5,
-        forceTimeout: TimeInterval = 3,
+        graceTimeout: TimeInterval = 12,
+        forceTimeout: TimeInterval = 8,
         isRunning: (() -> Bool)? = nil,
         graceful: (() -> Void)? = nil,
         force: (() -> Void)? = nil
