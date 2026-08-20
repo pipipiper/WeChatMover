@@ -121,9 +121,12 @@ private func makeIsolatedDefaults() -> (defaults: UserDefaults, cleanup: () -> V
 // MARK: - 签名命令
 
 @Test func codesignCommand() {
-    #expect(CodeSigner.codesignArguments
+    #expect(CodeSigner.codesignArguments()
             == ["--sign", "-", "--force", "--deep", "/Applications/WeChat.app"])
-    #expect(CodeSigner.shellCommand == "codesign --sign - --force --deep /Applications/WeChat.app")
+    #expect(CodeSigner.shellCommand() == "codesign --sign - --force --deep /Applications/WeChat.app")
+    // 企业微信档案
+    #expect(CodeSigner.shellCommand(appPath: "/Applications/企业微信.app")
+            == "codesign --sign - --force --deep /Applications/企业微信.app")
 }
 
 // MARK: - App Store 版检测
@@ -543,8 +546,10 @@ private final class QuitFixture: @unchecked Sendable {
 }
 
 @Test func terminalFallbackCommand() {
-    #expect(CodeSigner.terminalCommand
+    #expect(CodeSigner.terminalCommand()
             == "sudo codesign --sign - --force --deep /Applications/WeChat.app")
+    #expect(CodeSigner.terminalCommand(appPath: "/Applications/企业微信.app")
+            == "sudo codesign --sign - --force --deep /Applications/企业微信.app")
 }
 
 // MARK: - 目标冲突路径安全检查（纯逻辑）
@@ -2219,4 +2224,85 @@ private func makeOverwriteFixture(
                                    source: source2, state: .migrated,
                                    size: 0, hasBackup: false, backupSize: 0)]
     #expect(!vmMigrated.canOverwriteLocalWithExternal)
+}
+
+// MARK: - 多档案（微信 / 企业微信）
+
+@Test func appProfileConfiguration() {
+    let ww = AppProfile.wework
+    #expect(ww.bundleID == "com.tencent.WeWorkMac")
+    #expect(ww.appPath == "/Applications/企业微信.app")
+    // 不写死用户名：必须等于「当前用户 home + 容器相对路径」
+    #expect(ww.containerRoot == FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Containers/com.tencent.WeWorkMac/Data", isDirectory: true))
+    #expect(ww.candidateSubdirs == ["Documents/Profiles", "WeDrive"])
+    #expect(ww.downloadURL.absoluteString.contains("work.weixin.qq.com"))
+    #expect(ww.targetBaseDefaultsKey == "targetBasePath.wework")
+    #expect(ww.lastSignedVersionDefaultsKey == "lastSignedVersion.wework")
+
+    let wc = AppProfile.wechat
+    #expect(wc.containerRoot.path.hasSuffix("Library/Containers/com.tencent.xinWeChat/Data"))
+    #expect(wc.targetBaseDefaultsKey == "targetBasePath")   // 旧键名保持兼容
+}
+
+@Test func weworkItemNames() {
+    #expect(Copywriting.itemName("Documents/Profiles") == "聊天记录与文件")
+    #expect(Copywriting.itemName("WeDrive") == "微盘文件")
+}
+
+/// 切档案：容器/候选目录/偏好键/目标位置全部跟随，展示状态清空。
+@MainActor @Test func switchProfileSwapsContainerAndKeys() {
+    let (defaults, cleanup) = makeIsolatedDefaults()
+    defer { cleanup() }
+    let vm = AppViewModel()
+    vm.defaults = defaults
+    // 两个档案各自独立的目标位置
+    defaults.set("/Volumes/A/WeChat", forKey: AppProfile.wechat.targetBaseDefaultsKey)
+    defaults.set("/Volumes/B/WeWork", forKey: AppProfile.wework.targetBaseDefaultsKey)
+
+    vm.switchProfile(to: .wework)
+    #expect(vm.profile == .wework)
+    #expect(vm.containerRoot == AppProfile.wework.containerRoot)
+    #expect(vm.candidateSubdirs == AppProfile.wework.candidateSubdirs)
+    #expect(vm.targetBase?.path == "/Volumes/B/WeWork")
+    #expect(vm.items.isEmpty && vm.wechat.signature == nil)
+    #expect(vm.appName == "企业微信")
+
+    vm.switchProfile(to: .wechat)
+    #expect(vm.targetBase?.path == "/Volumes/A/WeChat")
+    #expect(vm.appName == "微信")
+}
+
+/// 操作进行中禁止切档案。
+@MainActor @Test func switchProfileRejectedWhileBusy() {
+    let vm = AppViewModel()
+    vm.isBusy = true
+    vm.switchProfile(to: .wework)
+    #expect(vm.profile == .wechat)
+    #expect(vm.notice?.contains("操作进行中") == true)
+}
+
+/// 串档回归：切档案后，旧一代 refresh 的迟滞结果必须全部作废。
+@MainActor @Test func staleGenerationResultsDiscarded() {
+    let vm = AppViewModel()
+    vm.switchProfile(to: .wework)
+    let staleGen = vm.refreshGeneration - 1
+    let fake = ItemStatus(subdir: "Documents/xwechat_files",
+                          source: URL(fileURLWithPath: "/tmp/stale"),
+                          state: .migrated, size: 1, hasBackup: true, backupSize: 1)
+    vm.applyItems([fake], readable: true, generation: staleGen)
+    #expect(vm.items.isEmpty)                       // 过期一代：丢弃
+    vm.applyItems([fake], readable: true, generation: vm.refreshGeneration)
+    #expect(vm.items.count == 1)                    // 当前代：生效
+}
+
+/// 串档回归：切档案后，旧档案的签名检测结果不回写。
+@MainActor @Test func signatureCheckDiscardedAfterProfileSwitch() async {
+    let vm = AppViewModel()
+    vm.wechat.isInstalled = true
+    vm.signatureVerifier = { .adhoc }   // 旧档案（微信）的检测结果
+    vm.checkSignatureNow()
+    vm.switchProfile(to: .wework)       // 检测未回就切档
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    #expect(vm.wechat.signature == nil) // 旧结果作废，不回写
 }

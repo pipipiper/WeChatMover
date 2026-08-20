@@ -41,8 +41,8 @@ struct StatusSummaryGrid: View {
     /// 安全检查卡片点开的技术详情（规范 5.3）。
     private var safetyDetails: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            detailRow("微信来源", Copywriting.sourceName(isAppStoreVersion: vm.wechat.isAppStoreVersion))
-            detailRow("微信版本", vm.wechat.version ?? "未安装")
+            detailRow("\(vm.appName)来源", Copywriting.sourceName(isAppStoreVersion: vm.wechat.isAppStoreVersion))
+            detailRow("\(vm.appName)版本", vm.wechat.version ?? "未安装")
             HStack {
                 detailRow("应用签名", vm.signatureDisplayText)
                 if vm.wechat.signature == nil && vm.wechat.isInstalled {
@@ -50,10 +50,10 @@ struct StatusSummaryGrid: View {
                 }
                 if vm.wechat.isInstalled {
                     // 常驻入口：微信/系统更新后微信打不开时，一键重签名修复
-                    Button("重新签名微信") { vm.resignWeChat() }
+                    Button("重新签名\(vm.appName)") { vm.resignWeChat() }
                         .controlSize(.small)
                         .disabled(vm.isBusy || vm.isResigning)
-                        .help("微信或 macOS 更新后微信无法打开时，点此重新签名修复")
+                        .help("\(vm.appName)或 macOS 更新后\(vm.appName)无法打开时，点此重新签名修复")
                 }
             }
             detailRow("目标磁盘格式", vm.targetFSType ?? "未选择")
@@ -110,7 +110,7 @@ struct StatusCard: View {
     private var icon: some View {
         if model.customIcon == .weChatApp {
             // 运行时取微信 App 真实图标，无需打包资源
-            Image(nsImage: NSWorkspace.shared.icon(forFile: CodeSigner.wechatAppPath))
+            Image(nsImage: NSWorkspace.shared.icon(forFile: model.customIconPath ?? CodeSigner.wechatAppPath))
                 .resizable()
                 .frame(width: 24, height: 24)
         } else {

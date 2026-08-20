@@ -68,8 +68,8 @@ struct ReadinessBanner: View {
         case .openFullDiskAccess:
             Button("打开系统设置") { PermissionHelper.openFullDiskAccess() }
         case .openOfficialDownload:
-            Button("打开微信官网") {
-                NSWorkspace.shared.open(WeChatDetector.officialDownloadURL)
+            Button("打开\(vm.appName)官网") {
+                NSWorkspace.shared.open(vm.profile.downloadURL)
             }
         case .retryMigration:
             Button("重试") { vm.requestMigration() }

@@ -24,8 +24,8 @@ enum DesignTokens {
         static let surface = Color(nsColor: .controlBackgroundColor)
         static let surfaceSubtle = Color(nsColor: .quaternaryLabelColor).opacity(0.2)
         static let separator = Color(nsColor: .separatorColor)
-        /// 微信绿：浅色 #07C160 / 深色 #20CD71
-        static let accent = Color.dynamic(light: 0x07C160, dark: 0x20CD71)
+        /// 主题色：跟随当前档案（微信绿 / 企业微信蓝），由 Theme.accent 提供。
+        static var accent: Color { Theme.accent }
         static let warning = Color.orange
         static let danger = Color.red
         static let info = Color.blue

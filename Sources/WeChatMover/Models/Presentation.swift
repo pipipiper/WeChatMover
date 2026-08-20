@@ -92,6 +92,8 @@ struct StatusCardModel: Identifiable, Equatable {
     let symbol: String
     let tone: StatusTone
     var customIcon: CardIcon? = nil
+    /// 自定义图标的 App 路径（运行时取真实图标）。
+    var customIconPath: String? = nil
     /// 图标在无警告/错误时用微信绿 accent（默认跟随 tone）。
     var iconUsesAccent: Bool = false
 }
@@ -127,6 +129,8 @@ enum Copywriting {
         case "xwechat_files": return "微信聊天文件"
         case "app_data": return "微信应用数据"
         case "com.tencent.xinWeChat": return "微信兼容数据"
+        case "Profiles": return "聊天记录与文件"
+        case "WeDrive": return "微盘文件"
         default: return (subdir as NSString).lastPathComponent
         }
     }

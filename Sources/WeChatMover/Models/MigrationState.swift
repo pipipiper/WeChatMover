@@ -105,29 +105,79 @@ final class AppViewModel: ObservableObject {
     var showAppManagementGuide: Bool { activeSheet == .appManagementGuide }
 
     /// 运行状态探测（测试可注入假实现）。
-    var isWeChatRunning: () -> Bool = WeChatDetector.isRunning
+    var isWeChatRunning: () -> Bool = { WeChatDetector.isRunning() }
     /// 实际执行重签名的闭包（测试可注入假实现）。
     var resignRunner: (@escaping @Sendable (CodeSigner.ResignResult) -> Void) -> Void =
-        CodeSigner.resignWeChat
-    /// /Applications/WeChat.app 可写性探测（测试可注入假实现）。
+        { completion in CodeSigner.resignWeChat(completion: completion) }
+    /// 目标 App 包可写性探测（测试可注入假实现）。
     var isAppBundleWritable: () -> Bool = { CodeSigner.isWritableByCurrentUser() }
     /// 签名状态检测（重签名后复核 / 手动检测共用；测试可注入假实现，避免扫真实 App）。
     var signatureVerifier: @Sendable () -> WeChatDetector.SignatureStatus = {
         WeChatDetector.signatureStatus()
     }
-    /// 退出微信流程（测试可注入假实现，不触碰真实微信）。
+    /// 退出目标 App 流程（测试可注入假实现，不触碰真实微信）。
     var wechatQuitter: @Sendable () async -> Bool = { await WeChatQuitter.ensureQuit() }
     /// 偏好存储（测试注入独立 suite，避免并行测试共享 standard 的竞态）。
     var defaults: UserDefaults = .standard
 
-    /// 微信来源展示文案。
+    /// 当前目标 App 档案（微信 / 企业微信）。
+    @Published var profile: AppProfile = .wechat
+
+    /// 当前档案的展示名（用户可见文案统一走这里）。
+    var appName: String { profile.displayName }
+
+    /// 目标 App 来源展示文案。
     var sourceDescription: String {
         guard wechat.isInstalled else { return "—" }
         return wechat.isAppStoreVersion ? "App Store 版" : "官网 DMG 版"
     }
 
-    /// 容器根目录（测试可注入临时目录 fixture，默认真实路径）。
+    /// 容器根目录（测试可注入临时目录 fixture，默认跟随当前档案）。
     var containerRoot = WeChatPaths.defaultContainerRoot
+    /// 候选迁移子目录（测试可注入，默认跟随当前档案）。
+    var candidateSubdirs: [String] = WeChatPaths.candidateSubdirs
+
+    /// 切换目标 App 档案：重挂路径/注入实现/档案专属偏好键，清空状态后整体刷新。
+    /// 有操作进行中时拒绝切换（弹提示）。
+    func switchProfile(to newProfile: AppProfile) {
+        guard newProfile != profile else { return }
+        guard !isBusy && !isResigning && !isQuittingWeChat else {
+            notice = "当前有操作进行中，请完成后再切换。"
+            return
+        }
+        profile = newProfile
+        Theme.accent = newProfile.accent
+        containerRoot = newProfile.containerRoot
+        candidateSubdirs = newProfile.candidateSubdirs
+        bindInjectables(to: newProfile)
+
+        // 清空上一个档案的全部展示状态
+        wechat = WeChatInfo()
+        items = []
+        sizesLoaded = false
+        externalDataSize = nil
+        migrationOutcome = nil
+        notice = nil
+        lastError = nil
+        activeDialog = nil
+        activeSheet = nil
+        targetBase = defaults.string(forKey: newProfile.targetBaseDefaultsKey)
+            .map { URL(fileURLWithPath: $0) }
+        refreshTargetInfo()
+        refresh()
+    }
+
+    /// 生产实现的注入闭包跟随档案（测试注入的 fake 会在切档案后被真实实现覆盖，
+    /// 测试里切档案后需重新注入）。
+    private func bindInjectables(to p: AppProfile) {
+        isWeChatRunning = { WeChatDetector.isRunning(bundleID: p.bundleID) }
+        resignRunner = { completion in
+            CodeSigner.resignWeChat(appPath: p.appPath, completion: completion)
+        }
+        isAppBundleWritable = { CodeSigner.isWritableByCurrentUser(appPath: p.appPath) }
+        signatureVerifier = { WeChatDetector.signatureStatus(appURL: p.appURL) }
+        wechatQuitter = { await WeChatQuitter.ensureQuit(bundleID: p.bundleID) }
+    }
 
     // MARK: - 派生状态
 
@@ -156,7 +206,7 @@ final class AppViewModel: ObservableObject {
     /// 微信版本相对上次签名是否变化（提示需要重签名）。
     var wechatVersionChanged: Bool {
         guard let current = wechat.version else { return false }
-        guard let last = defaults.string(forKey: DefaultsKey.lastSignedVersion) else { return false }
+        guard let last = defaults.string(forKey: profile.lastSignedVersionDefaultsKey) else { return false }
         return current != last
     }
 
@@ -256,15 +306,15 @@ final class AppViewModel: ObservableObject {
     /// 安全检查待处理项（安全卡片与安全详情共用）。
     var safetyIssues: [String] {
         var issues: [String] = []
-        if !wechat.isInstalled { issues.append("未检测到微信") }
-        if wechat.isAppStoreVersion { issues.append("App Store 版微信不受支持") }
+        if !wechat.isInstalled { issues.append("未检测到\(appName)") }
+        if wechat.isAppStoreVersion { issues.append("App Store 版\(appName)不受支持") }
         if !containerReadable { issues.append("需要完全磁盘访问权限") }
         if !interruptedItems.isEmpty { issues.append("存在迁移中断残留") }
         if wechat.signature == .broken { issues.append("应用签名已失效") }
         if wechat.signature == .validOfficial && !migratedItems.isEmpty {
-            issues.append("微信已恢复官方签名，需重新签名后才能正常打开")
+            issues.append("\(appName)已恢复官方签名，需重新签名后才能正常打开")
         }
-        if wechatVersionChanged { issues.append("微信已更新，需要重新签名") }
+        if wechatVersionChanged { issues.append("\(appName)已更新，需要重新签名") }
         return issues
     }
 
@@ -280,7 +330,7 @@ final class AppViewModel: ObservableObject {
             case .succeeded(let items, let bytes):
                 return .succeeded(
                     "已迁移 \(items) 项数据（共 \(DiskProbe.formatBytes(bytes))）到 \(destinationName)。"
-                    + "打开微信确认正常后，可在下方清理本地备份释放空间。")
+                    + "打开\(appName)确认正常后，可在下方清理本地备份释放空间。")
             case .failed(let message):
                 return .failed(message)
             }
@@ -312,7 +362,7 @@ final class AppViewModel: ObservableObject {
             return BannerModel(
                 tone: .neutral, symbol: "magnifyingglass",
                 title: "正在检查环境…",
-                message: "正在检测微信安装状态、数据目录与目标磁盘。")
+                message: "正在检测\(appName)安装状态、数据目录与目标磁盘。")
         case .ready:
             // 非 APFS：不禁止迁移，但横幅给强提示
             if !isTargetAPFS, let fs = targetFSType {
@@ -328,17 +378,17 @@ final class AppViewModel: ObservableObject {
         case .externalized:
             return BannerModel(
                 tone: .success, symbol: "checkmark.seal.fill",
-                title: "微信数据已在外置硬盘",
-                message: "全部数据已迁移到 \(destinationName)。外置盘未连接时请不要打开微信。")
+                title: "\(appName)数据已在外置硬盘",
+                message: "全部数据已迁移到 \(destinationName)。外置盘未连接时请不要打开\(appName)。")
         case .backupOnly(let count, let bytes):
             return BannerModel(
                 tone: .info, symbol: "internaldrive",
                 title: "检测到本地备份",
                 message: "外置硬盘未连接或未迁移，但 Mac 上留有 \(count) 项本地备份（共 \(DiskProbe.formatBytes(bytes))）。可用「还原内置存储数据到 Mac…」回到 Mac 上的旧数据，全程不需要外置硬盘。")
         case .blocked(let blocker):
-            return Self.bannerForBlocker(blocker)
+            return bannerForBlocker(blocker)
         case .busy(let kind, let value):
-            return Self.bannerForBusy(kind, progress: value)
+            return bannerForBusy(kind, progress: value)
         case .succeeded(let summary):
             return BannerModel(
                 tone: .success, symbol: "checkmark.seal.fill",
@@ -350,24 +400,24 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private static func bannerForBlocker(_ blocker: Blocker) -> BannerModel {
+    private func bannerForBlocker(_ blocker: Blocker) -> BannerModel {
         switch blocker {
         case .notInstalled:
             return BannerModel(
                 tone: .danger, symbol: "xmark.octagon.fill",
-                title: "未检测到微信",
-                message: "请先安装微信官网下载版，再使用本工具迁移数据。",
+                title: "未检测到\(appName)",
+                message: "请先安装\(appName)官网下载版，再使用本工具迁移数据。",
                 fix: .openOfficialDownload)
         case .appStoreVersion:
             return BannerModel(
                 tone: .danger, symbol: "xmark.octagon.fill",
-                title: "暂不支持 App Store 版微信",
+                title: "暂不支持 App Store 版\(appName)",
                 message: "App Store 版受沙盒限制，迁移后软链会失效。请从官网下载 DMG 版覆盖安装。",
                 fix: .openOfficialDownload)
         case .containerUnreadable:
             return BannerModel(
                 tone: .warning, symbol: "lock.shield",
-                title: "需要访问微信数据",
+                title: "需要访问\(appName)数据",
                 message: "请在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 中允许 WeChatMover，然后重启本 App。",
                 fix: .openFullDiskAccess)
         case .interruptedResidue:
@@ -379,12 +429,12 @@ final class AppViewModel: ObservableObject {
             return BannerModel(
                 tone: .warning, symbol: "exclamationmark.triangle.fill",
                 title: "外置硬盘未连接",
-                message: "迁移目标不可达。请先连接硬盘再打开微信，否则微信会在 Mac 上新建空数据目录。")
+                message: "迁移目标不可达。请先连接硬盘再打开\(appName)，否则\(appName)会在 Mac 上新建空数据目录。")
         case .noDestination:
             return BannerModel(
                 tone: .info, symbol: "externaldrive",
                 title: "选择目标位置",
-                message: "在外置硬盘上选择一个文件夹，用于存放迁移后的微信数据。",
+                message: "在外置硬盘上选择一个文件夹，用于存放迁移后的\(appName)数据。",
                 fix: .chooseDestination)
         case .insufficientSpace(let need, let free):
             return BannerModel(
@@ -395,25 +445,25 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private static func bannerForBusy(_ kind: BusyKind, progress: Double?) -> BannerModel {
+    private func bannerForBusy(_ kind: BusyKind, progress: Double?) -> BannerModel {
         switch kind {
         case .migrating:
             let percent = Int(((progress ?? 0) * 100).rounded())
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
                 title: "正在迁移… \(percent)%",
-                message: "迁移期间请不要退出微信或拔出硬盘。",
+                message: "迁移期间请不要退出\(appName)或拔出硬盘。",
                 progress: progress)
         case .restoring:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
                 title: "正在还原外置数据到 Mac…",
-                message: "还原期间请不要打开微信或拔出硬盘。")
+                message: "还原期间请不要打开\(appName)或拔出硬盘。")
         case .restoringBackups:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
                 title: "正在还原内置备份到 Mac…",
-                message: "还原期间请不要打开微信。")
+                message: "还原期间请不要打开\(appName)。")
         case .comparing:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
@@ -423,7 +473,7 @@ final class AppViewModel: ObservableObject {
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
                 title: "正在用外置数据覆盖内置…",
-                message: "覆盖期间请不要打开微信或拔出硬盘；原内置数据已保留为 _backup。")
+                message: "覆盖期间请不要打开\(appName)或拔出硬盘；原内置数据已保留为 _backup。")
         case .deletingBackups:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
@@ -443,23 +493,23 @@ final class AppViewModel: ObservableObject {
             let percent = Int(((progress ?? 0) * 100).rounded())
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
-                title: "正在转移微信数据到新位置… \(percent)%",
-                message: "转移期间请不要打开微信或拔出硬盘；完成并校验后原位置数据才会清除。",
+                title: "正在转移\(appName)数据到新位置… \(percent)%",
+                message: "转移期间请不要打开\(appName)或拔出硬盘；完成并校验后原位置数据才会清除。",
                 progress: progress)
         case .repointing:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
                 title: "正在改指到新位置…",
-                message: "仅切换软链指向，不拷贝数据；期间请不要打开微信。")
+                message: "仅切换软链指向，不拷贝数据；期间请不要打开\(appName)。")
         case .quittingWeChat:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
-                title: "正在退出微信…",
+                title: "正在退出\(appName)…",
                 message: "优先优雅退出，几秒后未退出会强制结束。")
         case .resigning:
             return BannerModel(
                 tone: .info, symbol: "arrow.triangle.2.circlepath",
-                title: "正在重签名微信…",
+                title: "正在重签名\(appName)…",
                 message: "首次需要在「App 管理」中授权 WeChatMover。")
         }
     }
@@ -484,11 +534,12 @@ final class AppViewModel: ObservableObject {
         }
         // 已安装时用真实微信图标；未安装降级为绿色消息气泡
         let customIcon: CardIcon? = wechat.isInstalled ? .weChatApp : nil
-        return StatusCardModel(id: "data", title: "微信数据", value: value,
+        return StatusCardModel(id: "data", title: "\(appName)数据", value: value,
                                detail: detail,
                                symbol: wechat.isInstalled ? symbol : "message.circle.fill",
                                tone: wechat.isInstalled ? tone : .neutral,
                                customIcon: customIcon,
+                               customIconPath: profile.appPath,
                                iconUsesAccent: !wechat.isInstalled)
     }
 
@@ -528,7 +579,7 @@ final class AppViewModel: ObservableObject {
     private var safetyCard: StatusCardModel {
         let issues = safetyIssues
         let value = isLoading ? "检查中…" : (issues.isEmpty ? "全部通过" : "\(issues.count) 项待处理")
-        let detail = "微信 \(wechat.version ?? "—") · \(signatureDisplayText)"
+        let detail = "\(appName) \(wechat.version ?? "—") · \(signatureDisplayText)"
         return StatusCardModel(
             id: "safety", title: "安全检查", value: value, detail: detail,
             symbol: issues.isEmpty ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
@@ -539,7 +590,7 @@ final class AppViewModel: ObservableObject {
     var migrateConfirmMessage: String {
         let names = localItems.map { Copywriting.itemName($0.subdir) }.joined(separator: "、")
         var msg = "将迁移 \(names)（共 \(DiskProbe.formatBytes(totalLocalSize))）到 \(targetBase?.path ?? "")。\n\n"
-            + "微信将先退出；迁移期间请不要拔出硬盘。"
+            + "\(appName)将先退出；迁移期间请不要拔出硬盘。"
         if !isTargetAPFS, let fs = targetFSType {
             msg += "\n\n⚠️ 注意：目标磁盘格式为 \(fs)，不是 APFS。非 APFS 磁盘可能出现存储膨胀、性能下降等问题，强烈建议改用 APFS 磁盘。"
         }
@@ -550,19 +601,26 @@ final class AppViewModel: ObservableObject {
 
     /// 每类字段独立后台填充：版本/来源与磁盘余量秒出，数据大小"统计中…"，
     /// 签名校验不在启动路径（默认"未检测"，由用户手动触发或重签名后自动跑）。
+    /// 刷新代数：切档案/新刷新作废旧任务，防止过期异步结果回写造成串档。
+    private(set) var refreshGeneration = 0
+
     func refresh() {
+        refreshGeneration += 1
+        let generation = refreshGeneration
         isLoading = true
         sizesLoaded = false
         let containerRoot = self.containerRoot
-        let savedTarget = defaults.string(forKey: DefaultsKey.targetBasePath)
+        let profile = self.profile
+        let candidateSubdirs = self.candidateSubdirs
+        let savedTarget = defaults.string(forKey: profile.targetBaseDefaultsKey)
         if let savedTarget {
             targetBase = URL(fileURLWithPath: savedTarget)
         }
 
         // 1) 微信本体检测：只读 /Applications/WeChat.app 的 Info.plist，毫秒级。
         Task.detached { [weak self] in
-            let info = WeChatDetector.detect()
-            await self?.applyWeChat(info)
+            let info = WeChatDetector.detect(appURL: profile.appURL, bundleID: profile.bundleID)
+            await self?.applyWeChat(info, generation: generation)
         }
 
         // 2) 磁盘余量与目标卷格式：statfs，秒出。
@@ -574,14 +632,14 @@ final class AppViewModel: ObservableObject {
                 fsType = DiskProbe.volumeFSType(path: savedTarget)
                 free = DiskProbe.freeSpace(path: savedTarget)
             }
-            await self?.applyDiskInfo(homeFree: homeFree, targetFSType: fsType, targetFree: free)
+            await self?.applyDiskInfo(homeFree: homeFree, targetFSType: fsType, targetFree: free, generation: generation)
         }
 
         // 3) 容器状态（首次可能触发 TCC 授权弹窗，先出状态不含大小），
         //    随后才做可能分钟级的目录大小枚举。
         Task.detached { [weak self] in
             let readable = PermissionHelper.canReadContainer(path: containerRoot.path)
-            let items: [ItemStatus] = WeChatPaths.candidateSubdirs.compactMap { subdir in
+            let items: [ItemStatus] = candidateSubdirs.compactMap { subdir in
                 let source = WeChatPaths.sourceDirectory(containerRoot: containerRoot, subdir: subdir)
                 let state = itemState(at: source)
                 guard state != .missing else { return nil }
@@ -590,7 +648,7 @@ final class AppViewModel: ObservableObject {
                 return ItemStatus(subdir: subdir, source: source, state: state,
                                   size: 0, hasBackup: hasBackup, backupSize: 0)
             }
-            await self?.applyItems(items, readable: readable)
+            await self?.applyItems(items, readable: readable, generation: generation)
 
             // 慢速：递归统计大小（含备份大小），完成后单独填充。
             var sized = items
@@ -608,7 +666,7 @@ final class AppViewModel: ObservableObject {
                         at: WeChatPaths.backupDirectory(for: sized[i].source))
                 }
             }
-            await self?.applySizes(sized)
+            await self?.applySizes(sized, generation: generation)
 
             // 外置 WeChatData 占用（状态面板展示；可能分钟级，放最后）。
             var extSize: Int64? = nil
@@ -618,7 +676,7 @@ final class AppViewModel: ObservableObject {
                     extSize = DiskProbe.directorySize(at: root)
                 }
             }
-            await self?.applyExternalDataSize(extSize)
+            await self?.applyExternalDataSize(extSize, generation: generation)
         }
     }
 
@@ -627,7 +685,8 @@ final class AppViewModel: ObservableObject {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
-    private func applyWeChat(_ info: WeChatInfo) {
+    func applyWeChat(_ info: WeChatInfo, generation: Int) {
+        guard generation == refreshGeneration else { return }   // 过期任务丢弃
         // 保留已检测过的签名状态（refresh 不清空手动检测结果）
         var info = info
         info.signature = wechat.signature
@@ -641,23 +700,27 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func applyDiskInfo(homeFree: Int64?, targetFSType fs: String?, targetFree: Int64?) {
+    func applyDiskInfo(homeFree: Int64?, targetFSType fs: String?, targetFree: Int64?, generation: Int) {
+        guard generation == refreshGeneration else { return }
         homeFreeSpace = homeFree
         targetFSType = fs
         targetFreeSpace = targetFree
     }
 
-    private func applyItems(_ items: [ItemStatus], readable: Bool) {
+    func applyItems(_ items: [ItemStatus], readable: Bool, generation: Int) {
+        guard generation == refreshGeneration else { return }
         self.items = items
         containerReadable = readable
     }
 
-    private func applySizes(_ sized: [ItemStatus]) {
+    func applySizes(_ sized: [ItemStatus], generation: Int) {
+        guard generation == refreshGeneration else { return }
         items = sized
         sizesLoaded = true
     }
 
-    private func applyExternalDataSize(_ size: Int64?) {
+    func applyExternalDataSize(_ size: Int64?, generation: Int) {
+        guard generation == refreshGeneration else { return }
         externalDataSize = size
     }
 
@@ -670,14 +733,18 @@ final class AppViewModel: ObservableObject {
         signatureCheckInFlight = true
         wechat.signature = nil
         let verifier = signatureVerifier
+        let checkedProfile = profile
         Task.detached { [weak self] in
             let status = verifier()
-            await self?.applySignature(status)
+            await self?.applySignature(status, profile: checkedProfile)
         }
     }
 
-    private func applySignature(_ status: WeChatDetector.SignatureStatus) {
+    private func applySignature(
+        _ status: WeChatDetector.SignatureStatus, profile checkedProfile: AppProfile
+    ) {
         signatureCheckInFlight = false
+        guard checkedProfile == profile else { return }   // 切档案后旧检测作废
         wechat.signature = status
     }
 
@@ -745,7 +812,7 @@ final class AppViewModel: ObservableObject {
     /// 选中目标文件夹后的处理（与弹窗解耦，可单测）。
     func applyTargetSelection(_ url: URL) {
         targetBase = url
-        defaults.set(url.path, forKey: DefaultsKey.targetBasePath)
+        defaults.set(url.path, forKey: profile.targetBaseDefaultsKey)
         migrationOutcome = nil
         refreshTargetInfo()
         log("已选择目标位置：\(url.path)")
@@ -839,10 +906,10 @@ final class AppViewModel: ObservableObject {
         guard let newBase = pendingRelocateBase else { return }
         clearPendingRepoint()
         targetBase = newBase
-        defaults.set(newBase.path, forKey: DefaultsKey.targetBasePath)
+        defaults.set(newBase.path, forKey: profile.targetBaseDefaultsKey)
         refreshTargetInfo()
         log("已更新记录的目标位置：\(newBase.path)（未改动任何数据与链接）")
-        log("⚠️ 提示：当前软链仍指向原位置。如新位置与实际数据位置不符，微信将无法正常读取。")
+        log("⚠️ 提示：当前软链仍指向原位置。如新位置与实际数据位置不符，\(appName)将无法正常读取。")
         refresh()
     }
 
@@ -853,8 +920,8 @@ final class AppViewModel: ObservableObject {
         clearPendingRepoint(keepBase: false)
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再改指。"
-            log("❌ 改指被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再改指。"
+            log("❌ 改指被拒绝：\(appName)正在运行")
             return
         }
         let todo = migratedItems
@@ -895,9 +962,9 @@ final class AppViewModel: ObservableObject {
         if error == nil && skipped.isEmpty {
             // 全部改指成功：新位置生效并持久化；旧位置数据保留不动。
             applyTargetSelection(newBase)
-            log("全部数据已改指到新位置（未拷贝，旧位置数据保留未删），正在重签名微信…")
+            log("全部数据已改指到新位置（未拷贝，旧位置数据保留未删），正在重签名\(appName)…")
             resignWeChat()
-            notice = "改指完成：微信已使用新位置 \(newBase.path) 的数据；旧位置数据原样保留，确认无误后可手动清理。"
+            notice = "改指完成：\(appName)已使用新位置 \(newBase.path) 的数据；旧位置数据原样保留，确认无误后可手动清理。"
             refresh()
             return
         }
@@ -922,13 +989,13 @@ final class AppViewModel: ObservableObject {
         let path = pendingRelocateBase?.path ?? ""
         var msg = "新位置：\n\(path)\n\n"
         if pendingRepointMissing == 0 {
-            msg += "已在新位置检测到全部 \(pendingRepointPresent) 项微信数据。\n\n"
+            msg += "已在新位置检测到全部 \(pendingRepointPresent) 项\(appName)数据。\n\n"
         } else if pendingRepointPresent > 0 {
             msg += "新位置检测到 \(pendingRepointPresent) 项数据，缺少 \(pendingRepointMissing) 项（缺少的项将保持原指向，可补齐后重跑本流程）。\n\n"
         } else {
-            msg += "⚠️ 新位置未检测到微信数据。\n\n"
+            msg += "⚠️ 新位置未检测到\(appName)数据。\n\n"
         }
-        msg += "「直接改指」：不拷贝数据，微信立即使用新位置的数据，旧位置数据保留不删（要求新位置的数据完整）。\n"
+        msg += "「直接改指」：不拷贝数据，\(appName)立即使用新位置的数据，旧位置数据保留不删（要求新位置的数据完整）。\n"
             + "「只更新记录」：数据和链接都不动，仅更新工具记录的目标位置——仅当你已自行处理好数据和链接时使用。"
         return msg
     }
@@ -953,8 +1020,8 @@ final class AppViewModel: ObservableObject {
         pendingRelocateNonAPFS = nil
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再转移。"
-            log("❌ 转移被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再转移。"
+            log("❌ 转移被拒绝：\(appName)正在运行")
             return
         }
         let todo = migratedItems
@@ -1015,9 +1082,9 @@ final class AppViewModel: ObservableObject {
             }.count
             let detail: String
             if movedCount > 0 {
-                detail = "\(movedCount) 项已转移到新位置，其余仍在原位置；微信数据完整未丢失。检查硬盘连接后重新执行「更改…」可继续转移（已转移的项会自动跳过）。"
+                detail = "\(movedCount) 项已转移到新位置，其余仍在原位置；\(appName)数据完整未丢失。检查硬盘连接后重新执行「更改…」可继续转移（已转移的项会自动跳过）。"
             } else {
-                detail = "微信数据仍保留在原位置，未受影响。请检查硬盘连接后重试。"
+                detail = "\(appName)数据仍保留在原位置，未受影响。请检查硬盘连接后重试。"
             }
             migrationOutcome = .failed("\(error)\n\(detail)")
             log("❌ 转移未完成：\(error)")
@@ -1028,9 +1095,9 @@ final class AppViewModel: ObservableObject {
         progress = 1
         // 转移成功：新位置生效并持久化
         applyTargetSelection(newBase)
-        log("全部数据已转移到新位置，正在重签名微信…")
+        log("全部数据已转移到新位置，正在重签名\(appName)…")
         resignWeChat()
-        notice = "转移完成：微信数据已转移到 \(newBase.path)，原位置数据已清除。"
+        notice = "转移完成：\(appName)数据已转移到 \(newBase.path)，原位置数据已清除。"
         refresh()
     }
 
@@ -1175,7 +1242,7 @@ final class AppViewModel: ObservableObject {
         wechat.isRunning = isWeChatRunning()
         guard wechat.isRunning else { operation(); return }
         isQuittingWeChat = true
-        log("正在退出微信…")
+        log("正在退出\(appName)…")
         let quitter = wechatQuitter
         Task.detached { [weak self] in
             let quit = await quitter()
@@ -1187,11 +1254,11 @@ final class AppViewModel: ObservableObject {
         isQuittingWeChat = false
         wechat.isRunning = isWeChatRunning()
         if quit && !wechat.isRunning {
-            log("✅ 微信已退出")
+            log("✅ \(appName)已退出")
             operation()
         } else {
-            lastError = "无法退出微信，请手动退出后重试。"
-            log("❌ 退出微信失败")
+            lastError = "无法退出\(appName)，请手动退出后重试。"
+            log("❌ 退出\(appName)失败")
         }
     }
 
@@ -1200,8 +1267,8 @@ final class AppViewModel: ObservableObject {
         // 兜底：确认框打开期间微信又被启动，拒绝迁移。
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再迁移。"
-            log("❌ 迁移被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再迁移。"
+            log("❌ 迁移被拒绝：\(appName)正在运行")
             return
         }
         let todo = localItems
@@ -1297,7 +1364,7 @@ final class AppViewModel: ObservableObject {
             }
         } else {
             migrationOutcome = .succeeded(items: localItems.count, bytes: totalLocalSize)
-            log("全部迁移完成，正在重签名微信…")
+            log("全部迁移完成，正在重签名\(appName)…")
             resignWeChat()
             activeSheet = .guide
         }
@@ -1405,7 +1472,7 @@ final class AppViewModel: ObservableObject {
             busyKind = nil
             progress = 1
             migrationOutcome = .succeeded(items: adoptedCount, bytes: adoptedBytes)
-            log("全部数据已链接外置副本，正在重签名微信…")
+            log("全部数据已链接外置副本，正在重签名\(appName)…")
             resignWeChat()
             activeSheet = .guide
             refresh()
@@ -1421,8 +1488,8 @@ final class AppViewModel: ObservableObject {
         // 兜底：确认框打开期间微信又被启动，拒绝还原。
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再还原。"
-            log("❌ 还原被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再还原。"
+            log("❌ 还原被拒绝：\(appName)正在运行")
             return
         }
         let todo = migratedItems
@@ -1454,7 +1521,7 @@ final class AppViewModel: ObservableObject {
             lastError = error
             log("❌ 还原失败：\(error)")
         } else {
-            log("全部还原完成，正在重签名微信…")
+            log("全部还原完成，正在重签名\(appName)…")
             resignWeChat()
         }
         refresh()
@@ -1467,8 +1534,8 @@ final class AppViewModel: ObservableObject {
         // 兜底：确认框打开期间微信又被启动，拒绝还原。
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再还原。"
-            log("❌ 还原被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再还原。"
+            log("❌ 还原被拒绝：\(appName)正在运行")
             return
         }
         let todo = migratedItems
@@ -1498,8 +1565,8 @@ final class AppViewModel: ObservableObject {
         // 兜底：确认框打开期间微信又被启动，拒绝还原。
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再还原内置备份。"
-            log("❌ 还原内置备份被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再还原内置备份。"
+            log("❌ 还原内置备份被拒绝：\(appName)正在运行")
             return
         }
         let todo = restorableBackupItems
@@ -1529,7 +1596,7 @@ final class AppViewModel: ObservableObject {
             lastError = error
             log("❌ 还原内置备份失败：\(error)")
         } else {
-            log("已还原内置备份，正在重签名微信…")
+            log("已还原内置备份，正在重签名\(appName)…")
             resignWeChat()
         }
         refresh()
@@ -1586,8 +1653,8 @@ final class AppViewModel: ObservableObject {
         // 兜底：确认框打开期间微信又被启动，拒绝覆盖。
         wechat.isRunning = isWeChatRunning()
         guard !wechat.isRunning else {
-            lastError = "微信正在运行，请先退出微信再覆盖。"
-            log("❌ 覆盖被拒绝：微信正在运行")
+            lastError = "\(appName)正在运行，请先退出\(appName)再覆盖。"
+            log("❌ 覆盖被拒绝：\(appName)正在运行")
             return
         }
         let todo = localItems
@@ -1618,7 +1685,7 @@ final class AppViewModel: ObservableObject {
             lastError = error
             log("❌ 覆盖失败：\(error)")
         } else {
-            log("覆盖完成。原内置数据已保留为 _backup，确认无误后可用「清理备份…」释放空间。正在重签名微信…")
+            log("覆盖完成。原内置数据已保留为 _backup，确认无误后可用「清理备份…」释放空间。正在重签名\(appName)…")
             resignWeChat()
         }
         refresh()
@@ -1632,11 +1699,11 @@ final class AppViewModel: ObservableObject {
         guard isAppBundleWritable() else {
             resignGuideReason = .notWritable
             activeSheet = .appManagementGuide
-            log("⚠️ \(CodeSigner.wechatAppPath) 当前用户不可写，请按指引在终端执行 sudo 命令")
+            log("⚠️ \(profile.appPath) 当前用户不可写，请按指引在终端执行 sudo 命令")
             return
         }
         isResigning = true
-        log("正在重签名微信…")
+        log("正在重签名\(appName)…")
         resignRunner { [weak self] result in
             Task { @MainActor [weak self] in
                 self?.resignFinished(result: result)
@@ -1649,9 +1716,9 @@ final class AppViewModel: ObservableObject {
         switch result {
         case .success:
             if let v = wechat.version {
-                defaults.set(v, forKey: DefaultsKey.lastSignedVersion)
+                defaults.set(v, forKey: profile.lastSignedVersionDefaultsKey)
             }
-            log("✅ 微信重签名完成，正在复核签名…")
+            log("✅ \(appName)重签名完成，正在复核签名…")
             refresh()
             // 签名后自动复核，结果回日志。
             let verifier = signatureVerifier

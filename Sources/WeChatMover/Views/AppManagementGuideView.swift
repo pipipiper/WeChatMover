@@ -60,7 +60,7 @@ struct AppManagementGuideView: View {
 
     private var commandBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(CodeSigner.terminalCommand)
+            Text(CodeSigner.terminalCommand(appPath: vm.profile.appPath))
                 .font(.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
                 .padding(8)
@@ -68,7 +68,7 @@ struct AppManagementGuideView: View {
                 .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
             Button(copied ? "已复制 ✅" : "复制命令") {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(CodeSigner.terminalCommand, forType: .string)
+                NSPasteboard.general.setString(CodeSigner.terminalCommand(appPath: vm.profile.appPath), forType: .string)
                 copied = true
             }
         }

@@ -16,17 +16,17 @@ enum CodeSigner {
     }
 
     /// 进程内直接执行的 codesign 参数。
-    static var codesignArguments: [String] {
-        ["--sign", "-", "--force", "--deep", wechatAppPath]
+    static func codesignArguments(appPath: String = wechatAppPath) -> [String] {
+        ["--sign", "-", "--force", "--deep", appPath]
     }
 
     /// 兜底方案：包当前用户不可写时在终端里执行的命令（终端通常已有「App 管理」权限）。
-    static var shellCommand: String {
-        "codesign --sign - --force --deep \(wechatAppPath)"
+    static func shellCommand(appPath: String = wechatAppPath) -> String {
+        "codesign --sign - --force --deep \(appPath)"
     }
 
-    static var terminalCommand: String {
-        "sudo \(shellCommand)"
+    static func terminalCommand(appPath: String = wechatAppPath) -> String {
+        "sudo \(shellCommand(appPath: appPath))"
     }
 
     /// /Applications/WeChat.app 当前用户是否可写（不可写时需终端 sudo 兜底）。
@@ -85,12 +85,15 @@ enum CodeSigner {
         }
     }
 
-    /// 对微信执行 ad-hoc 重签名（异步，completion 在后台线程回调）。
+    /// 对目标 App 执行 ad-hoc 重签名（异步，completion 在后台线程回调）。
     /// 不提权、不弹密码框；首次可能触发 TCC「App 管理」授权提示。
-    static func resignWeChat(completion: @escaping @Sendable (ResignResult) -> Void) {
+    static func resignWeChat(
+        appPath: String = wechatAppPath,
+        completion: @escaping @Sendable (ResignResult) -> Void
+    ) {
         run(
             executableURL: URL(fileURLWithPath: "/usr/bin/codesign"),
-            arguments: codesignArguments,
+            arguments: codesignArguments(appPath: appPath),
             completion: completion
         )
     }

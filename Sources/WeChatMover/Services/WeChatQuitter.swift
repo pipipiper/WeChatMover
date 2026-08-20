@@ -1,37 +1,34 @@
 import Foundation
 import AppKit
 
-/// 退出微信：优先优雅退出（AppleScript quit），等几秒仍未退出再强制结束。
+/// 退出目标 App：优先优雅退出（AppleScript quit），等几秒仍未退出再强制结束。
 /// 强杀的是自己用户的进程，不需要管理员权限。
 enum WeChatQuitter {
-    static let appName = "WeChat"
-
-    /// 优雅退出：AppleScript `tell application "WeChat" to quit`。
+    /// 优雅退出：AppleScript `tell application id <bundleID> to quit`
+    /// （用 bundle id 定位，比按名称更可靠，微信/企业微信通用）。
     /// 可能触发「自动化」权限弹窗，调用方负责在此之前激活本 App。
-    static func requestGracefulQuit() {
+    static func requestGracefulQuit(bundleID: String = WeChatDetector.bundleID) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", "tell application \"\(appName)\" to quit"]
+        process.arguments = ["-e", "tell application id \"\(bundleID)\" to quit"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
         process.waitUntilExit()
     }
 
-    /// 强制结束当前用户的全部微信进程（kill，无需提权）。
-    static func forceKill() {
-        for app in NSRunningApplication.runningApplications(
-            withBundleIdentifier: WeChatDetector.bundleID
-        ) {
+    /// 强制结束当前用户的全部目标进程（kill，无需提权）。
+    static func forceKill(bundleID: String = WeChatDetector.bundleID) {
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
             app.forceTerminate()
         }
     }
 
-    /// 轮询等待微信退出，最多 timeout 秒；返回是否已退出。
+    /// 轮询等待目标 App 退出，最多 timeout 秒；返回是否已退出。
     static func waitForExit(
         timeout: TimeInterval,
         pollInterval: TimeInterval = 0.3,
-        isRunning: () -> Bool = WeChatDetector.isRunning
+        isRunning: () -> Bool = { WeChatDetector.isRunning() }
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -44,12 +41,15 @@ enum WeChatQuitter {
     /// 完整流程：优雅退出 → 等 graceTimeout → 仍运行则强杀 → 再等 forceTimeout。
     /// 依赖全部可注入，单测用假 closure 验证流程分支，不触碰真实微信。
     static func ensureQuit(
+        bundleID: String = WeChatDetector.bundleID,
         graceTimeout: TimeInterval = 5,
         forceTimeout: TimeInterval = 3,
-        isRunning: () -> Bool = WeChatDetector.isRunning,
-        graceful: () -> Void = requestGracefulQuit,
-        force: () -> Void = forceKill
+        isRunning: () -> Bool = { WeChatDetector.isRunning() },
+        graceful: (() -> Void)? = nil,
+        force: (() -> Void)? = nil
     ) async -> Bool {
+        let graceful = graceful ?? { requestGracefulQuit(bundleID: bundleID) }
+        let force = force ?? { forceKill(bundleID: bundleID) }
         guard isRunning() else { return true }
         graceful()
         if await waitForExit(timeout: graceTimeout, isRunning: isRunning) { return true }

@@ -17,9 +17,9 @@ struct ActionSection: View {
     /// 只保留步骤与说明文字，进度条与百分比以顶部横幅为准（不重复展示）。
     private var progressPanel: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text("正在复制微信数据")
+            Text("正在复制\(vm.appName)数据")
                 .font(.headline)
-            Text("迁移期间请不要退出微信或拔出硬盘")
+            Text("迁移期间请不要退出\(vm.appName)或拔出硬盘")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

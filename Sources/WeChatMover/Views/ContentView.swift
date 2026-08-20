@@ -11,6 +11,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    profileTabs
                     pageHeader
                     ReadinessBanner(model: vm.banner)
                     StatusSummaryGrid()
@@ -27,6 +28,7 @@ struct ContentView: View {
             githubFooter
         }
         .background(DesignTokens.Colors.background)
+        .tint(vm.profile.accent)   // 控件强调色跟随档案（微信绿/企业微信蓝）
         .toolbar { toolbarItems }
         .alert(item: alertOnlyDialog, content: dialog)
         // 三选项弹窗用 confirmationDialog（Alert 只支持两个按钮），
@@ -41,7 +43,7 @@ struct ContentView: View {
             Button("取消", role: .cancel) {}
         } message: {
             let size = vm.externalDataSize.map { "约 \(DiskProbe.formatBytes($0))" } ?? "大小统计中"
-            Text("当前微信数据位于：\n\(vm.targetBase?.path ?? "")（\(size)）\n\n「转移」会把数据完整拷贝到新位置，校验通过后清除原位置数据（期间请勿打开微信或拔出硬盘）。\n「不转移」不拷贝任何数据，仅切换指向或更新记录，原位置数据保留不动。")
+            Text("当前\(vm.appName)数据位于：\n\(vm.targetBase?.path ?? "")（\(size)）\n\n「转移」会把数据完整拷贝到新位置，校验通过后清除原位置数据（期间请勿打开\(vm.appName)或拔出硬盘）。\n「不转移」不拷贝任何数据，仅切换指向或更新记录，原位置数据保留不动。")
         }
         .confirmationDialog(
             "新位置怎么用？",
@@ -142,12 +144,52 @@ struct ContentView: View {
     /// 规范 5.1：标题 + 副标题，不重复完整产品名。
     private var pageHeader: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
-            Text("微信数据迁移")
+            Text("\(vm.appName)数据迁移")
                 .font(.title2.weight(.semibold))
-            Text("将微信数据安全迁移到外置硬盘，释放 Mac 空间。")
+            Text("将\(vm.appName)数据安全迁移到外置硬盘，释放 Mac 空间。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// 顶部档案切换页签：微信 / 企业微信，带真实 App 图标。
+    /// 有操作进行中（迁移/还原/重签名等）时禁用，防止状态错乱。
+    private var profileTabs: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            ForEach(AppProfile.allCases) { p in
+                let selected = vm.profile == p
+                Button {
+                    vm.switchProfile(to: p)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(nsImage: Self.appIcon(for: p))
+                            .resizable()
+                            .frame(width: 18, height: 18)
+                        Text(p.displayName)
+                            .font(.callout.weight(.medium))
+                    }
+                    .padding(.horizontal, DesignTokens.Spacing.sm)
+                    .padding(.vertical, DesignTokens.Spacing.xs)
+                    .background(
+                        Capsule().fill(selected ? vm.profile.accent.opacity(0.15) : Color.clear)
+                    )
+                    .overlay(
+                        Capsule().stroke(
+                            selected ? vm.profile.accent : DesignTokens.Colors.separator,
+                            lineWidth: 1)
+                    )
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isBusy || vm.isResigning || vm.isQuittingWeChat)
+                .accessibilityLabel("切换到\(p.displayName)")
+            }
+        }
+    }
+
+    /// 页签图标：目标 App 的真实图标（未安装时系统给通用图标兜底）。
+    private static func appIcon(for profile: AppProfile) -> NSImage {
+        NSWorkspace.shared.icon(forFile: profile.appPath)
     }
 
     /// 窗口底部固定的 GitHub 仓库链接（mark 为模板渲染，深浅色自适应）。
@@ -220,21 +262,21 @@ struct ContentView: View {
         switch dialog {
         case .migrateConfirm:
             return Alert(
-                title: Text("迁移微信数据到“\(vm.destinationName)”？"),
+                title: Text("迁移\(vm.appName)数据到“\(vm.destinationName)”？"),
                 message: Text(vm.migrateConfirmMessage),
-                primaryButton: .default(Text("退出微信并开始迁移")) { vm.confirmMigration() },
+                primaryButton: .default(Text("退出\(vm.appName)并开始迁移")) { vm.confirmMigration() },
                 secondaryButton: .cancel())
         case .relocateConfirm, .repointChoice:
             // 由 confirmationDialog 呈现（Alert 只支持两个按钮），不会走到这里
             return Alert(title: Text("更改目标位置"))
         case .relocateExecute:
             let size = vm.externalDataSize.map { "约 \(DiskProbe.formatBytes($0))" } ?? ""
-            var msg = "将把微信数据（\(size)）转移到：\n\(vm.pendingRelocateBase?.path ?? "")\n\n数据量较大，转移可能需要几分钟到几十分钟，期间请保持硬盘连接、不要打开微信。转移完成并校验通过后，原位置数据会自动清除。"
+            var msg = "将把\(vm.appName)数据（\(size)）转移到：\n\(vm.pendingRelocateBase?.path ?? "")\n\n数据量较大，转移可能需要几分钟到几十分钟，期间请保持硬盘连接、不要打开\(vm.appName)。转移完成并校验通过后，原位置数据会自动清除。"
             if let fs = vm.pendingRelocateNonAPFS {
                 msg += "\n\n⚠️ 注意：新位置的磁盘格式为 \(fs)，不是 APFS。非 APFS 磁盘可能出现存储膨胀、性能下降等问题，强烈建议改用 APFS 磁盘。"
             }
             return Alert(
-                title: Text("确认转移微信数据？"),
+                title: Text("确认转移\(vm.appName)数据？"),
                 message: Text(msg),
                 primaryButton: .default(Text("开始转移")) { vm.confirmRelocate() },
                 secondaryButton: .cancel(Text("取消")) {
@@ -245,7 +287,7 @@ struct ContentView: View {
             return Alert(
                 title: Text("还原外置存储数据到 Mac？"),
                 message: Text((vm.restoreNote.map { $0 + "\n\n" } ?? "")
-                    + "来源：外置硬盘上的 WeChatData → 目标：Mac 内置盘原位置。如微信正在运行，将先自动退出。"),
+                    + "来源：外置硬盘上的 WeChatData → 目标：Mac 内置盘原位置。如\(vm.appName)正在运行，将先自动退出。"),
                 primaryButton: .destructive(Text("确认还原")) { vm.confirmRestore() },
                 secondaryButton: .cancel())
         case .restoreSameChoice, .restoreNewerChoice:
@@ -254,7 +296,7 @@ struct ContentView: View {
         case .backupRestoreConfirm:
             return Alert(
                 title: Text("还原内置存储数据到 Mac？"),
-                message: Text("来源：Mac 内置盘上的本地备份（_backup）→ 目标：Mac 内置盘原位置。将删除符号链接、把备份改回原名：放弃迁移，回到 Mac 上的旧数据。全程不访问外置硬盘（不插盘也能用），外置数据保留不动，可之后用「清理外置数据…」删除。如需保留外置盘上的最新数据，请改用「还原外置存储数据到 Mac…」。如微信正在运行，将先自动退出。"),
+                message: Text("来源：Mac 内置盘上的本地备份（_backup）→ 目标：Mac 内置盘原位置。将删除符号链接、把备份改回原名：放弃迁移，回到 Mac 上的旧数据。全程不访问外置硬盘（不插盘也能用），外置数据保留不动，可之后用「清理外置数据…」删除。如需保留外置盘上的最新数据，请改用「还原外置存储数据到 Mac…」。如\(vm.appName)正在运行，将先自动退出。"),
                 primaryButton: .destructive(Text("确认还原")) { vm.confirmRestoreBackups() },
                 secondaryButton: .cancel())
         case .backupConfirm:
@@ -275,7 +317,7 @@ struct ContentView: View {
         case .overwriteConfirm:
             return Alert(
                 title: Text("用外置数据覆盖内置？"),
-                message: Text("将用外置硬盘上的数据覆盖 Mac 内置盘上的现有数据。覆盖前会先把当前内置数据备份为 _backup（安全网，可事后用「还原内置存储数据到 Mac…」恢复，或确认无误后用「清理备份…」释放空间）；外置硬盘上的数据保留不动。如微信正在运行，将先自动退出。"),
+                message: Text("将用外置硬盘上的数据覆盖 Mac 内置盘上的现有数据。覆盖前会先把当前内置数据备份为 _backup（安全网，可事后用「还原内置存储数据到 Mac…」恢复，或确认无误后用「清理备份…」释放空间）；外置硬盘上的数据保留不动。如\(vm.appName)正在运行，将先自动退出。"),
                 primaryButton: .destructive(Text("确认覆盖")) { vm.confirmOverwriteWithExternal() },
                 secondaryButton: .cancel())
         case .error:
