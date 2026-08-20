@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 目标位置整行选择器（规范 5.4）：路径只读、中间截断、悬停显示完整路径；
-/// 未选择时显示虚线空状态；校验失败行内提示（横幅同步说明）。
+/// 未选择时为同卡片样式的占位行（与已选择视觉统一）；校验失败行内提示（横幅同步说明）。
 struct DestinationPickerRow: View {
     @EnvironmentObject var vm: AppViewModel
 
@@ -55,7 +55,7 @@ struct DestinationPickerRow: View {
         .cardStyle()
     }
 
-    /// 未选择：虚线空状态，整行可点。
+    /// 未选择：与已选择相同的卡片样式（实线），占位文案 + 选择入口，整行可点。
     private var emptyRow: some View {
         Button { vm.chooseTarget() } label: {
             HStack(spacing: DesignTokens.Spacing.sm) {
@@ -69,22 +69,18 @@ struct DestinationPickerRow: View {
                 Text("选择…")
                     .foregroundStyle(DesignTokens.Colors.accent)
             }
-            .padding(DesignTokens.Spacing.md)
-            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
-                    .stroke(DesignTokens.Colors.separator,
-                            style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
-            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .cardStyle()
     }
 
-    /// 行内校验错误（不弹连续 Alert）。
+    /// 行内校验提示（不弹连续 Alert）。
     private var inlineProblem: String? {
         guard vm.targetBase != nil else { return nil }
         if !vm.isTargetAPFS {
-            return "该磁盘格式不受支持，请选择 APFS 格式的磁盘。"
+            return "目标磁盘不是 APFS 格式，可能出现存储膨胀、性能下降等问题，建议改用 APFS 磁盘。"
         }
         if vm.sizesLoaded, !vm.localItems.isEmpty,
            let free = vm.targetFreeSpace, free < vm.totalLocalSize {
