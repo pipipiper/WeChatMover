@@ -37,7 +37,9 @@ enum AppProfile: String, CaseIterable, Identifiable {
             .appendingPathComponent("Library/Containers/\(bundleID)/Data", isDirectory: true)
     }
 
-    /// 候选迁移子目录（相对容器 Data 根）。
+    /// 候选迁移子目录。相对路径基于容器 Data 根；以 "/" 开头的为绝对路径
+    /// （企业微信的 Profiles 例外：该版本运行时使用真实 ~/Documents/Profiles，
+    /// 容器内 Documents 只是安装期布置，软链必须建在真实 home 路径上）。
     var candidateSubdirs: [String] {
         switch self {
         case .wechat:
@@ -48,8 +50,9 @@ enum AppProfile: String, CaseIterable, Identifiable {
             ]
         case .wework:
             return [
-                "Documents/Profiles",   // 聊天记录与聊天文件
-                "WeDrive",              // 微盘同步文件
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Documents/Profiles").path,  // 实测：运行时用真实 home
+                "WeDrive",              // 微盘同步文件（容器路径，软链有效）
             ]
         }
     }

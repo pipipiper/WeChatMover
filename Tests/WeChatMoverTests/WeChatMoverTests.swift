@@ -43,6 +43,17 @@ private func makeIsolatedDefaults() -> (defaults: UserDefaults, cleanup: () -> V
             == "/Volumes/Ext/MyFolder/WeChatData/com.tencent.xinWeChat")
 }
 
+@Test func sourcePathAbsolutePassthrough() {
+    // 绝对路径子目录（企业微信 Profiles）原样返回，不拼容器根
+    let abs = "/Users/whoever/Documents/Profiles"
+    #expect(WeChatPaths.sourceDirectory(
+        containerRoot: URL(fileURLWithPath: "/tmp/container"), subdir: abs).path == abs)
+    // 相对路径仍拼容器根
+    #expect(WeChatPaths.sourceDirectory(
+        containerRoot: URL(fileURLWithPath: "/tmp/container"),
+        subdir: "WeDrive").path == "/tmp/container/WeDrive")
+}
+
 @Test func sourcePathMapping() {
     let container = URL(fileURLWithPath: "/tmp/container/Data", isDirectory: true)
     #expect(WeChatPaths.sourceDirectory(containerRoot: container, subdir: "Documents/xwechat_files").path
@@ -2235,7 +2246,11 @@ private func makeOverwriteFixture(
     // 不写死用户名：必须等于「当前用户 home + 容器相对路径」
     #expect(ww.containerRoot == FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Containers/com.tencent.WeWorkMac/Data", isDirectory: true))
-    #expect(ww.candidateSubdirs == ["Documents/Profiles", "WeDrive"])
+    #expect(ww.candidateSubdirs.count == 2)
+    // Profiles 在真实 home（企业微信运行时用 ~/Documents/Profiles，不用容器路径）
+    #expect(ww.candidateSubdirs[0] == FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Documents/Profiles").path)
+    #expect(ww.candidateSubdirs[1] == "WeDrive")
     #expect(ww.downloadURL.absoluteString.contains("work.weixin.qq.com"))
     #expect(ww.targetBaseDefaultsKey == "targetBasePath.wework")
     #expect(ww.lastSignedVersionDefaultsKey == "lastSignedVersion.wework")
