@@ -214,8 +214,9 @@ enum Migrator {
 
     // MARK: - 强制从外置盘还原
 
-    /// 强制从外置盘还原（外置数据比本地备份新时）：拷回 → 校验 → 删外置副本，
-    /// 并删除已被外置数据取代的本地 _backup（留着会变成"中断残留"状态）。
+    /// 强制从外置盘还原（外置数据比本地备份新时）：拷回 → 校验 → 删外置副本。
+    /// 本地 _backup 绝不自动删除（备份只能由用户手动清理）；保留并打「覆盖安全网」标记，
+    /// 避免被误判为「迁移中断残留」。
     static func restoreItemFromExternal(source: URL, target: URL) throws {
         let fm = FileManager.default
         guard DiskProbe.isSymlink(source) else { throw MigrationError.notMigrated(source.path) }
@@ -235,7 +236,7 @@ enum Migrator {
             throw error
         }
 
-        // 3. 校验后删外置副本与过期备份
+        // 3. 校验后删外置副本；本地 _backup 保留并打「覆盖安全网」标记（备份只能人工删除）
         guard DiskProbe.directorySize(at: source) == expectedSize else {
             try? fm.removeItem(at: source)
             try? fm.createSymbolicLink(at: source, withDestinationURL: target)
@@ -243,7 +244,8 @@ enum Migrator {
         }
         try? fm.removeItem(at: target)
         if fm.fileExists(atPath: backup.path) {
-            try? fm.removeItem(at: backup)
+            fm.createFile(atPath: backup.appendingPathComponent(Self.overwriteBackupMarker).path,
+                          contents: Data())
         }
     }
 

@@ -105,7 +105,8 @@ enum ActiveDialog: String, Identifiable {
     case repointChoice        // 不转移流程：选完新位置后，选 改指 / 只改记录（confirmationDialog 呈现）
     // 三选项弹窗（confirmationDialog 呈现）：
     case restoreSameChoice    // 外置入口：比对一致，选 内置备份(更快)/仍从外置拷贝
-    case restoreNewerChoice   // 内置入口：外置更新，选 改用外置(推荐)/仍用内置备份
+    case restoreNewerChoice   // 内置入口：外置更新（有完整清单），选 改用外置(推荐)/仍用内置备份
+    case restoreUncertainChoice // 内置入口：外置不一致但无完整清单（可能迁移中断、外置残缺），选 用内置备份(推荐)/仍从外置拷贝
     case overwriteConfirm     // 用外置数据覆盖内置（destructive 确认）
     case existingTarget, cleanExternal
     case error, notice

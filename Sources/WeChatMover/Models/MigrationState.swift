@@ -1062,47 +1062,65 @@ final class AppViewModel: ObservableObject {
         busyKind = .comparing
         log("正在比对数据新旧…")
         Task.detached { [weak self] in
-            let same = Self.externalMatchesBackup(items: withBackup, base: base)
-            await self?.restoreComparisonFinished(same: same)
+            let result = Self.compareExternalWithBackup(items: withBackup, base: base)
+            await self?.restoreComparisonFinished(result)
         }
+    }
+
+    /// 新旧判定结果。
+    enum BackupComparison: Equatable {
+        case same                                   // 外置与内置备份一致
+        /// 不一致。externalProvenComplete = 有完整迁移清单（manifest 覆盖全部比对项），
+        /// 可证明外置是完整迁移产物；缺失清单多半意味着迁移被中断，外置数据可能残缺。
+        case differs(externalProvenComplete: Bool)
+        case unknown                                // 无法判定（外置不可读等）
     }
 
     /// 新旧判定：本地备份与外置数据是否一致。
     /// 有 manifest 只重算外置侧（快）；无 manifest（旧迁移）双侧各算一次。
-    /// 返回 nil = 无法判定（外置不可读等），调用方回退现有流程。
-    nonisolated static func externalMatchesBackup(items: [ItemStatus], base: URL) -> Bool? {
+    nonisolated static func compareExternalWithBackup(items: [ItemStatus], base: URL) -> BackupComparison {
         let manifest = Fingerprint.readManifest(base: base)
+        // 外置完整性证明：有清单且覆盖全部比对项
+        let provenComplete = manifest.map { m in
+            items.allSatisfy { m.fingerprint(for: $0.subdir) != nil }
+        } ?? false
         for item in items {
             let target = WeChatPaths.targetDirectory(base: base, subdir: item.subdir)
-            guard let external = Fingerprint.compute(at: target) else { return nil }
+            guard let external = Fingerprint.compute(at: target) else { return .unknown }
             let reference: Fingerprint.Value
             if let fromManifest = manifest?.fingerprint(for: item.subdir) {
                 reference = fromManifest
             } else {
                 let backup = WeChatPaths.backupDirectory(for: item.source)
-                guard let fp = Fingerprint.compute(at: backup) else { return nil }
+                guard let fp = Fingerprint.compute(at: backup) else { return .unknown }
                 reference = fp
             }
-            if external != reference { return false }
+            if external != reference { return .differs(externalProvenComplete: provenComplete) }
         }
-        return true
+        return .same
     }
 
-    private func restoreComparisonFinished(same: Bool?) {
+    private func restoreComparisonFinished(_ result: BackupComparison) {
         isBusy = false
         busyKind = nil
-        switch same {
-        case .some(true):
+        switch result {
+        case .same:
             // 一致：提示可直接用内置备份（省拷贝时间），也可仍从外置拷贝
             log("外置数据与内置备份一致，提示可选择内置备份快速还原")
             activeDialog = .restoreSameChoice
-        case .some(false):
-            // 外置更新：用户点的就是「还原外置」，直接使用外置数据，不弹新旧提示
+        case .differs(let provenComplete):
+            // 外置不一致：用户点的就是「还原外置」，直接使用外置数据，不弹新旧选择框
             pendingRestoreForceExternal = true
-            restoreNote = "外置数据比内置备份新（迁移后有新聊天记录写入外置盘），本次将使用外置硬盘上的数据还原；拷回后过期的内置备份与外置副本会被清理。"
-            log("外置数据有更新，按你的选择使用外置数据还原")
+            if provenComplete {
+                restoreNote = "外置数据比内置备份新（迁移后有新聊天记录写入外置盘），本次将使用外置硬盘上的数据还原；内置备份会保留为安全网（确认无误后可手动清理），外置副本在还原成功后移除。"
+                log("外置数据有更新，按你的选择使用外置数据还原")
+            } else {
+                // 无完整迁移清单：外置可能来自中断的迁移（残缺），警告但尊重用户选择
+                restoreNote = "⚠️ 外置数据与内置备份不一致，且外置侧缺少完整迁移清单——上次迁移可能被中断，外置数据可能不完整。如不确定，请取消并改用「还原内置存储数据到 Mac…」。"
+                log("⚠️ 外置数据不一致且无完整迁移清单，可能来自中断的迁移")
+            }
             activeDialog = .restoreConfirm
-        case .none:
+        case .unknown:
             // 比对失败（外置盘断开等）：回退现有流程
             restoreNote = nil
             log("⚠️ 无法读取外置数据进行比对，按原流程继续")
@@ -1140,24 +1158,31 @@ final class AppViewModel: ObservableObject {
         busyKind = .comparing
         log("正在比对数据新旧…")
         Task.detached { [weak self] in
-            let same = Self.externalMatchesBackup(items: todo, base: base)
-            await self?.backupComparisonFinished(same: same)
+            let result = Self.compareExternalWithBackup(items: todo, base: base)
+            await self?.backupComparisonFinished(result)
         }
     }
 
-    private func backupComparisonFinished(same: Bool?) {
+    private func backupComparisonFinished(_ result: BackupComparison) {
         isBusy = false
         busyKind = nil
-        switch same {
-        case .some(false):
-            // 外置更新：提示改用外置数据还原（用户点的是内置入口，需要提醒）
-            log("⚠️ 外置数据比内置备份新（迁移后有新写入）")
-            activeDialog = .restoreNewerChoice
-        case .some(true):
+        switch result {
+        case .differs(let provenComplete):
+            if provenComplete {
+                // 有完整迁移清单，外置确实更新：提示改用外置数据还原（用户点的是内置入口，需要提醒）
+                log("⚠️ 外置数据比内置备份新（迁移后有新写入）")
+                activeDialog = .restoreNewerChoice
+            } else {
+                // 无完整迁移清单：外置很可能来自中断的迁移（残缺），"外置更新"结论不可信，
+                // 反过来推荐内置备份（迁移前本机的完整数据）
+                log("⚠️ 外置数据不一致且无完整迁移清单，可能来自中断的迁移，推荐内置备份")
+                activeDialog = .restoreUncertainChoice
+            }
+        case .same:
             // 一致：数据相同无需打扰，直接走内置备份确认框
             log("外置数据与内置备份一致，直接使用内置备份还原")
             activeDialog = .backupRestoreConfirm
-        case .none:
+        case .unknown:
             log("⚠️ 无法读取外置数据进行比对，按原流程继续")
             activeDialog = .backupRestoreConfirm
         }
@@ -1461,7 +1486,7 @@ final class AppViewModel: ObservableObject {
     }
 
     /// 强制从外置盘还原（新旧判定不一致、用户选「使用外置数据还原」）：
-    /// 忽略本地备份，逐项从外置拷回，过期 _backup 随各项一并清除。
+    /// 忽略本地备份，逐项从外置拷回；旧 _backup 保留并打安全网标记（备份只能人工删除）。
     func startRestoreFromExternal() {
         guard let base = targetBase else { return }
         // 兜底：确认框打开期间微信又被启动，拒绝还原。

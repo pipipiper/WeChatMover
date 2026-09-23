@@ -2009,8 +2009,22 @@ private func writeManifestFor(base: URL, subdir: String, target: URL) throws {
     try Data(repeating: 7, count: 64).write(to: target.appendingPathComponent("new-chat.bin"))
 
     vm.requestRestoreBackups()
-    // 外置更新：提示改用外置数据还原
+    // 有完整清单 + 外置更新：提示改用外置数据还原
     #expect(await waitUntil { vm.activeDialog == .restoreNewerChoice && !vm.isBusy })
+}
+
+/// 迁移中断场景：外置与备份不一致但无完整清单（外置可能残缺），
+/// 不能再推荐"外置更新改用外置"（误导），应反过来推荐内置备份。
+@MainActor @Test func backupRestoreDecisionDiffersNoManifestShowsUncertainChoice() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("WeChatMoverTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (vm, _, _, target) = try makeRestoreFixture(root)   // 不写 manifest → 无完整性证明
+    try Data(repeating: 7, count: 64).write(to: target.appendingPathComponent("partial.bin"))
+
+    vm.requestRestoreBackups()
+    #expect(await waitUntil { vm.activeDialog == .restoreUncertainChoice && !vm.isBusy })
 }
 
 @MainActor @Test func backupRestoreDecisionUnpluggedSkipsCompare() {
@@ -2043,7 +2057,10 @@ private func writeManifestFor(base: URL, subdir: String, target: URL) throws {
         #expect(itemState(at: source) == .local)
         #expect(DiskProbe.directorySize(at: source) == 192)   // 含新数据
         #expect(!FileManager.default.fileExists(atPath: target.path))  // 外置副本已删
-        #expect(!FileManager.default.fileExists(atPath: backup.path))  // 过期备份已删
+        // 备份绝不自动删除：保留并打「覆盖安全网」标记（避免被误判为迁移中断残留）
+        #expect(FileManager.default.fileExists(atPath: backup.path))
+        #expect(Migrator.isOverwriteBackup(backup))
+        #expect(itemState(at: source) == .local)   // 带标记 → 不算中断残留
     }
 }
 

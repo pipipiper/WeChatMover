@@ -87,6 +87,17 @@ struct ContentView: View {
         } message: {
             Text("外置硬盘上的数据比内置备份新（通常是迁移后有新聊天记录写入外置盘），建议优先还原外置数据。")
         }
+        .confirmationDialog(
+            "外置数据可能不完整",
+            isPresented: restoreUncertainChoicePresented,
+            titleVisibility: .visible
+        ) {
+            Button("使用内置备份还原（推荐）") { vm.confirmRestoreBackups() }
+            Button("仍从外置硬盘拷贝（数据可能残缺）", role: .destructive) { vm.confirmRestoreFromExternal() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("外置数据与内置备份不一致，且外置侧没有完整的迁移清单——很可能上次迁移被中断（如关机、拔盘），外置数据是残缺的。\n\n内置备份是迁移前 Mac 上的完整数据，建议使用内置备份还原。")
+        }
         .sheet(item: $vm.activeSheet, content: sheet)
     }
 
@@ -95,8 +106,8 @@ struct ContentView: View {
         Binding(
             get: {
                 switch vm.activeDialog {
-                case .restoreSameChoice, .restoreNewerChoice, .existingTarget,
-                     .relocateConfirm, .repointChoice: return nil
+                case .restoreSameChoice, .restoreNewerChoice, .restoreUncertainChoice,
+                     .existingTarget, .relocateConfirm, .repointChoice: return nil
                 default: return vm.activeDialog
                 }
             },
@@ -135,6 +146,13 @@ struct ContentView: View {
     private var restoreNewerChoicePresented: Binding<Bool> {
         Binding(
             get: { vm.activeDialog == .restoreNewerChoice },
+            set: { if !$0 { vm.activeDialog = nil } }
+        )
+    }
+
+    private var restoreUncertainChoicePresented: Binding<Bool> {
+        Binding(
+            get: { vm.activeDialog == .restoreUncertainChoice },
             set: { if !$0 { vm.activeDialog = nil } }
         )
     }
@@ -248,7 +266,7 @@ struct ContentView: View {
                     + "来源：外置硬盘上的 WeChatData → 目标：Mac 内置盘原位置。如微信正在运行，将先自动退出。"),
                 primaryButton: .destructive(Text("确认还原")) { vm.confirmRestore() },
                 secondaryButton: .cancel())
-        case .restoreSameChoice, .restoreNewerChoice:
+        case .restoreSameChoice, .restoreNewerChoice, .restoreUncertainChoice:
             // 由 confirmationDialog 呈现（Alert 不支持三个按钮），不会走到这里
             return Alert(title: Text("还原方式选择"))
         case .backupRestoreConfirm:
